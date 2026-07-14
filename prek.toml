@@ -1,0 +1,78 @@
+#:schema https://www.schemastore.org/prek.json
+
+minimum_prek_version = "0.4.9"
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "uv-lock"
+name = "uv lock"
+entry = "uv lock --check"
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 10
+
+[[repos.hooks]]
+id = "ruff-format"
+name = "Ruff format"
+entry = "uv run ruff format --check ."
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 10
+
+[[repos.hooks]]
+id = "ruff-check"
+name = "Ruff check"
+entry = "uv run ruff check ."
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 10
+
+[[repos.hooks]]
+id = "pyright"
+name = "Pyright"
+entry = "uv run pyright"
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 10
+
+[[repos.hooks]]
+id = "pyright-verifytypes"
+name = "Pyright verifytypes"
+entry = "uv run pyright --verifytypes hermes_agent_api_client --ignoreexternal"
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 10
+
+[[repos.hooks]]
+id = "tests"
+name = "tests with coverage"
+entry = "bash -c 'uv run coverage run -m pytest && uv run coverage report'"
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 20
+
+[[repos.hooks]]
+id = "build"
+name = "build distributions"
+entry = "uv build"
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 30
+
+[[repos.hooks]]
+id = "verify-dist"
+name = "verify distributions"
+entry = "bash -c 'uv run python scripts/verify_dist.py dist/*.whl dist/*.tar.gz'"
+language = "system"
+pass_filenames = false
+always_run = true
+priority = 31

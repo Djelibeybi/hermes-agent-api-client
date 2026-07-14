@@ -91,18 +91,13 @@ evidence from a live Hermes server.
 
 ## Development
 
-Install the exact locked development environment and run all local gates:
+Install the exact locked development environment, install the commit hook, and
+run the complete quality gate:
 
 ```console
 uv sync --locked --all-groups
-uv run ruff format --check .
-uv run ruff check .
-uv run coverage run -m pytest
-uv run coverage report
-npx --yes pyright@1.1.411
-uv run npx --yes pyright@1.1.411 --verifytypes hermes_agent_api_client --ignoreexternal
-uv build
-uv run python scripts/verify_dist.py dist/*.whl dist/*.tar.gz
+uv run prek install --prepare-hooks
+uv run prek run --all-files
 ```
 
 ## License

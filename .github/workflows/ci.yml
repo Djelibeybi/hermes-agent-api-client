@@ -30,11 +30,4 @@ jobs:
           version: "0.11.28"
           enable-cache: true
       - run: uv sync --locked --all-groups --python "${{ matrix.python-version }}"
-      - run: uv run ruff format --check .
-      - run: uv run ruff check .
-      - run: uv run coverage run -m pytest
-      - run: uv run coverage report
-      - run: npx --yes pyright@1.1.411
-      - run: uv run npx --yes pyright@1.1.411 --verifytypes hermes_agent_api_client --ignoreexternal
-      - run: uv build
-      - run: uv run python scripts/verify_dist.py dist/*.whl dist/*.tar.gz
+      - run: uv run prek run --all-files
