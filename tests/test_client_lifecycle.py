@@ -24,6 +24,9 @@ from hermes_agent_api_client import (
     TerminalEvent,
     TerminalOutcome,
 )
+from hermes_agent_api_client.client import (
+    _MAX_CAPABILITIES_BYTES,  # pyright: ignore[reportPrivateUsage]
+)
 from hermes_agent_api_client.models import FailureCategory
 from tests.helpers.hermes import load_golden_json
 
@@ -684,6 +687,75 @@ async def test_capability_status_failure_precedes_response_close_failure() -> No
 
 
 @pytest.mark.asyncio
+async def test_capability_status_failure_precedes_response_close_cancellation() -> None:
+    """A capability status failure remains typed over close cancellation."""
+    close_cancellation = asyncio.CancelledError("capability-status-close-cancellation")
+    body = b"capability-status-cancellation-body-canary"
+    header_canary = "capability-status-cancellation-header-canary"
+    response_stream = TrackingAsyncByteStream(
+        (body,),
+        close_failure=close_cancellation,
+    )
+    responses: list[httpx.Response] = []
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        response = httpx.Response(
+            _UPSTREAM_STATUS_CODE,
+            headers={"x-private-response-header": header_canary},
+            request=request,
+            stream=response_stream,
+        )
+        responses.append(response)
+        return response
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(HermesHttpStatusError) as failure:
+                await client.probe_capabilities()
+
+        error = failure.value
+        assert type(error) is HermesHttpStatusError
+        assert error.category is FailureCategory.HTTP_STATUS
+        assert error.status_code == _UPSTREAM_STATUS_CODE
+        assert error.retryable is True
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        assert error is not close_cancellation
+        assert response_stream.closed is True
+        assert injected_http_client.is_closed is False
+        _assert_no_sensitive_traceback_references(
+            error,
+            canaries=(
+                "capability-status-close-cancellation",
+                "capability-status-cancellation-body-canary",
+                header_canary,
+                _BASE_URL_CANARY,
+                _BEARER_KEY_CANARY,
+            ),
+            forbidden_objects=(
+                close_cancellation,
+                client,
+                injected_http_client,
+                response_stream,
+                responses[0],
+                requests[0],
+                client._headers,  # pyright: ignore[reportPrivateUsage]
+                body,
+            ),
+        )
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("body", "body_canary"),
     [
@@ -761,6 +833,171 @@ async def test_capability_protocol_failure_precedes_response_close_failure(
                 requests[0],
                 client._headers,  # pyright: ignore[reportPrivateUsage]
                 body,
+            ),
+        )
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "body_canary"),
+    [
+        (
+            b"capability-malformed-cancellation-body-canary",
+            "capability-malformed-cancellation-body-canary",
+        ),
+        (
+            b'{"platform":"capability-invalid-cancellation-shape-canary"}',
+            "capability-invalid-cancellation-shape-canary",
+        ),
+    ],
+    ids=["malformed-json", "invalid-shape"],
+)
+async def test_capability_protocol_failure_precedes_response_close_cancellation(
+    body: bytes,
+    body_canary: str,
+) -> None:
+    """A malformed capability body remains protocol failure over close cancel."""
+    close_cancellation = asyncio.CancelledError(
+        "capability-protocol-close-cancellation"
+    )
+    header_canary = "capability-protocol-cancellation-header-canary"
+    response_stream = TrackingAsyncByteStream(
+        (body,),
+        close_failure=close_cancellation,
+    )
+    responses: list[httpx.Response] = []
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        response = httpx.Response(
+            200,
+            headers={"x-private-response-header": header_canary},
+            request=request,
+            stream=response_stream,
+        )
+        responses.append(response)
+        return response
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(HermesProtocolError) as failure:
+                await client.probe_capabilities()
+
+        error = failure.value
+        assert type(error) is HermesProtocolError
+        assert error.category is FailureCategory.PROTOCOL
+        assert error.status_code is None
+        assert error.retryable is False
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        assert error is not close_cancellation
+        assert response_stream.closed is True
+        assert injected_http_client.is_closed is False
+        _assert_no_sensitive_traceback_references(
+            error,
+            canaries=(
+                "capability-protocol-close-cancellation",
+                body_canary,
+                header_canary,
+                _BASE_URL_CANARY,
+                _BEARER_KEY_CANARY,
+            ),
+            forbidden_objects=(
+                close_cancellation,
+                client,
+                injected_http_client,
+                response_stream,
+                responses[0],
+                requests[0],
+                client._headers,  # pyright: ignore[reportPrivateUsage]
+                body,
+            ),
+        )
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size_source", ["declared", "observed"])
+async def test_capability_limit_failure_precedes_response_close_cancellation(
+    size_source: str,
+) -> None:
+    """Declared and observed capability-limit failures outrank close cancel."""
+    close_cancellation = asyncio.CancelledError("capability-limit-close-cancellation")
+    header_canary = f"capability-{size_source}-limit-header-canary"
+    body = f"capability-{size_source}-limit-body-canary".encode()
+    if size_source == "observed":
+        body += b"x" * (_MAX_CAPABILITIES_BYTES + 1 - len(body))
+    headers = {"x-private-response-header": header_canary}
+    if size_source == "declared":
+        headers["content-length"] = str(_MAX_CAPABILITIES_BYTES + 1)
+    response_stream = TrackingAsyncByteStream(
+        (body,),
+        close_failure=close_cancellation,
+    )
+    responses: list[httpx.Response] = []
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        response = httpx.Response(
+            200,
+            headers=headers,
+            request=request,
+            stream=response_stream,
+        )
+        responses.append(response)
+        return response
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(HermesProtocolError) as failure:
+                await client.probe_capabilities()
+
+        error = failure.value
+        assert type(error) is HermesProtocolError
+        assert error.category is FailureCategory.PROTOCOL
+        assert error.status_code is None
+        assert error.retryable is False
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        assert error is not close_cancellation
+        assert response_stream.closed is True
+        assert injected_http_client.is_closed is False
+        _assert_no_sensitive_traceback_references(
+            error,
+            canaries=(
+                "capability-limit-close-cancellation",
+                f"capability-{size_source}-limit-body-canary",
+                header_canary,
+                _BASE_URL_CANARY,
+                _BEARER_KEY_CANARY,
+            ),
+            forbidden_objects=(
+                close_cancellation,
+                client,
+                injected_http_client,
+                response_stream,
+                responses[0],
+                requests[0],
+                client._headers,  # pyright: ignore[reportPrivateUsage]
+                body,
+                headers,
             ),
         )
     finally:

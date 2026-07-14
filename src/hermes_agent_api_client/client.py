@@ -206,13 +206,14 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
     http_client: httpx.AsyncClient,
     endpoint: httpx.URL,
     headers: Mapping[str, str],
-) -> HermesCapabilities | None:
+) -> HermesCapabilities:
     """Read and validate one bounded capability response within its byte budget."""
     payload = bytearray()
     response: httpx.Response | None = None
     cancellation: asyncio.CancelledError | None = None
     status_code: int | None = None
     protocol_failed = False
+    primary_outcome = False
     chunk = b""
     capabilities: HermesCapabilities | None = None
     try:
@@ -228,6 +229,7 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
                     response.raise_for_status()
                 except httpx.HTTPStatusError as error:
                     status_code = error.response.status_code
+                    primary_outcome = True
                 else:
                     valid_length, _ = _declared_content_length(response)
                     if valid_length:
@@ -237,25 +239,30 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
                                 break
                             payload.extend(chunk)
                     if not valid_length:
-                        return None
+                        protocol_failed = True
+                        primary_outcome = True
+                    else:
+                        capabilities = _parse_capabilities_payload(bytes(payload))
+                        protocol_failed = capabilities is None
+                        primary_outcome = protocol_failed
+            except asyncio.CancelledError as caught:
+                if not primary_outcome and response.is_closed:
                     capabilities = _parse_capabilities_payload(bytes(payload))
                     protocol_failed = capabilities is None
-            except asyncio.CancelledError as caught:
-                cancellation = caught.with_traceback(None)
-    except asyncio.CancelledError:
-        if cancellation is None:
-            raise
-    except Exception:
+                    primary_outcome = protocol_failed
+                if not primary_outcome:
+                    cancellation = caught.with_traceback(None)
+    except (asyncio.CancelledError, Exception):
         if (
             cancellation is None
-            and status_code is None
-            and not protocol_failed
+            and not primary_outcome
             and response is not None
             and response.is_closed
         ):
             capabilities = _parse_capabilities_payload(bytes(payload))
             protocol_failed = capabilities is None
-        if cancellation is None and status_code is None and not protocol_failed:
+            primary_outcome = protocol_failed
+        if cancellation is None and not primary_outcome:
             raise
     if cancellation is not None:
         response = None
@@ -277,7 +284,7 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
         capabilities = None
         del http_client, endpoint, headers
         _raise_protocol_failure()
-    return capabilities
+    return cast("HermesCapabilities", capabilities)
 
 
 def _load_json(payload: bytes) -> tuple[bool, object]:
@@ -328,10 +335,7 @@ async def _probe_capabilities(  # pyright: ignore[reportUnusedFunction]
         del http_client, base_url, headers, endpoint
         capabilities = None
         raise status_failure
-    if capabilities is None:
-        del http_client, base_url, headers, endpoint
-        _raise_protocol_failure()
-    return capabilities
+    return cast("HermesCapabilities", capabilities)
 
 
 async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]  # noqa: C901, PLR0912, PLR0915
