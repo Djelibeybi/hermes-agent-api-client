@@ -213,7 +213,8 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
     cancellation: asyncio.CancelledError | None = None
     status_code: int | None = None
     protocol_failed = False
-    transport_failed = False
+    read_transport_failed = False
+    cleanup_failed = False
     primary_outcome = False
     chunk = b""
     capabilities: HermesCapabilities | None = None
@@ -240,13 +241,16 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
                                     valid_length = False
                                     break
                                 payload.extend(chunk)
-                        except Exception:  # noqa: BLE001 - map opaque read failures safely
-                            transport_failed = True
-                            primary_outcome = True
+                        except Exception:  # noqa: BLE001 - classify read or close failures safely
+                            if response.is_closed:
+                                cleanup_failed = True
+                            else:
+                                read_transport_failed = True
+                                primary_outcome = True
                     if not valid_length:
                         protocol_failed = True
                         primary_outcome = True
-                    else:
+                    elif not read_transport_failed:
                         capabilities = _parse_capabilities_payload(bytes(payload))
                         protocol_failed = capabilities is None
                         primary_outcome = primary_outcome or protocol_failed
@@ -289,7 +293,15 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
         capabilities = None
         del http_client, endpoint, headers
         _raise_protocol_failure()
-    if transport_failed:
+    if read_transport_failed:
+        response = None
+        chunk = b""
+        payload.clear()
+        payload = bytearray()
+        capabilities = None
+        del http_client, endpoint, headers
+        _raise_transport_failure(transient=True)
+    if cleanup_failed:
         response = None
         chunk = b""
         payload.clear()

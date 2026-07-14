@@ -683,21 +683,30 @@ async def test_capability_context_close_failure_becomes_fresh_transport_error() 
 
 
 @pytest.mark.asyncio
-async def test_capability_transport_failure_precedes_response_close_cancellation() -> (
-    None
-):
+@pytest.mark.parametrize("body_kind", ["immediate", "partial", "complete"])
+async def test_capability_read_transport_failure_precedes_response_close_cancellation(
+    body_kind: str,
+) -> None:
     """A primary capability read failure outranks close cancellation."""
-    raw_source_failure = RuntimeError("capability-primary-read-transport-canary")
+    raw_source_failure = RuntimeError(f"capability-{body_kind}-read-transport-canary")
     close_cancellation = asyncio.CancelledError(
-        "capability-primary-transport-secondary-close-cancellation"
+        f"capability-{body_kind}-transport-secondary-close-cancellation"
     )
-    body_canary = "capability-primary-read-transport-body-canary"
-    header_canary = "capability-primary-read-transport-header-canary"
-    body = json.dumps(
-        {**load_golden_json("capabilities/supported.json"), "private": body_canary}
-    ).encode()
+    body_canary = f"capability-{body_kind}-read-transport-body-canary"
+    header_canary = f"capability-{body_kind}-read-transport-header-canary"
+    if body_kind == "complete":
+        body = json.dumps(
+            {**load_golden_json("capabilities/supported.json"), "private": body_canary}
+        ).encode()
+        chunks = (body,)
+    elif body_kind == "partial":
+        body = f'{{"platform":"{body_canary}"'.encode()
+        chunks = (body,)
+    else:
+        body = body_canary.encode()
+        chunks: tuple[bytes, ...] = ()
     response_stream = TrackingAsyncByteStream(
-        (body,),
+        chunks,
         close_failure=close_cancellation,
         iteration_failure=raw_source_failure,
     )
@@ -731,8 +740,8 @@ async def test_capability_transport_failure_precedes_response_close_cancellation
             failure.value,
             raw_error=raw_source_failure,
             canaries=(
-                "capability-primary-read-transport-canary",
-                "capability-primary-transport-secondary-close-cancellation",
+                f"capability-{body_kind}-read-transport-canary",
+                f"capability-{body_kind}-transport-secondary-close-cancellation",
                 body_canary,
                 header_canary,
                 _BASE_URL_CANARY,
