@@ -387,14 +387,14 @@ async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]  # noqa:
                         protocol_failed = True
             except asyncio.CancelledError as caught:
                 cancellation = caught.with_traceback(None)
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as caught:
         if cancellation is None:
-            raise
+            cancellation = caught.with_traceback(None)
     except httpx.HTTPStatusError as error:
-        if cancellation is None:
+        if cancellation is None and transport_failure is None and not protocol_failed:
             transport_failure = _status_failure(error.response.status_code)
     except httpx.RequestError:
-        if cancellation is None:
+        if cancellation is None and transport_failure is None and not protocol_failed:
             transport_failure = HermesTransportError(transient=True)
     except Exception:  # noqa: BLE001 - translate opaque cleanup failures safely
         if cancellation is None and transport_failure is None and not protocol_failed:
@@ -402,24 +402,26 @@ async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]  # noqa:
 
     response = None
     event = None
-    if cancellation is not None:
-        del http_client, base_url, headers, request, endpoint
-        request_headers.clear()
-        request_body = b""
-        terminal_events.clear()
-        _reraise_scrubbed_failure(cancellation)
     if protocol_failed:
+        cancellation = None
         del http_client, base_url, headers, request, endpoint
         request_headers.clear()
         request_body = b""
         terminal_events.clear()
         _raise_protocol_failure()
     if transport_failure is not None:
+        cancellation = None
         del http_client, base_url, headers, request, endpoint
         request_headers.clear()
         request_body = b""
         terminal_events.clear()
         raise transport_failure
+    if cancellation is not None:
+        del http_client, base_url, headers, request, endpoint
+        request_headers.clear()
+        request_body = b""
+        terminal_events.clear()
+        _reraise_scrubbed_failure(cancellation)
     terminal_event = terminal_events[0]
     terminal_events.clear()
     del http_client, base_url, headers, request, endpoint

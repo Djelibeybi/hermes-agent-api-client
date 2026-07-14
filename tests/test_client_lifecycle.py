@@ -28,6 +28,9 @@ from hermes_agent_api_client.client import (
     _MAX_CAPABILITIES_BYTES,  # pyright: ignore[reportPrivateUsage]
 )
 from hermes_agent_api_client.models import FailureCategory
+from hermes_agent_api_client.sse import (
+    MAX_EVENT_DATA_CHARS,  # pyright: ignore[reportPrivateUsage]
+)
 from tests.helpers.hermes import load_golden_json
 
 if TYPE_CHECKING:
@@ -1139,6 +1142,178 @@ async def test_stream_protocol_failure_precedes_response_close_failure() -> None
 
 
 @pytest.mark.asyncio
+async def test_stream_status_failure_precedes_response_close_cancellation() -> None:
+    """A stream status failure remains typed over response-close cancellation."""
+    close_cancellation = asyncio.CancelledError(
+        "stream-primary-secondary-close-cancellation"
+    )
+    body = b"stream-status-cancellation-body-canary"
+    header_canary = "stream-status-cancellation-header-canary"
+    request_document: dict[str, object] = {
+        "model": "hermes",
+        "private": "stream-status-cancellation-request-canary",
+    }
+    response_stream = TrackingAsyncByteStream(
+        (body,),
+        close_failure=close_cancellation,
+    )
+    responses: list[httpx.Response] = []
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        response = httpx.Response(
+            _UPSTREAM_STATUS_CODE,
+            headers={"x-private-response-header": header_canary},
+            request=request,
+            stream=response_stream,
+        )
+        responses.append(response)
+        return response
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(HermesHttpStatusError) as failure:
+                await anext(client.stream_chat_events(request_document))
+
+        error = failure.value
+        assert type(error) is HermesHttpStatusError
+        assert error.category is FailureCategory.HTTP_STATUS
+        assert error.status_code == _UPSTREAM_STATUS_CODE
+        assert error.retryable is True
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        assert error is not close_cancellation
+        assert response_stream.closed is True
+        assert injected_http_client.is_closed is False
+        _assert_no_sensitive_traceback_references(
+            error,
+            canaries=(
+                "stream-primary-secondary-close-cancellation",
+                "stream-status-cancellation-body-canary",
+                "stream-status-cancellation-request-canary",
+                header_canary,
+                _BASE_URL_CANARY,
+                _BEARER_KEY_CANARY,
+            ),
+            forbidden_objects=(
+                close_cancellation,
+                client,
+                injected_http_client,
+                response_stream,
+                responses[0],
+                requests[0],
+                client._headers,  # pyright: ignore[reportPrivateUsage]
+                request_document,
+                body,
+            ),
+        )
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "body_canary"),
+    [
+        (
+            b"data: {stream-malformed-sse-body-canary}\n\n",
+            "stream-malformed-sse-body-canary",
+        ),
+        (
+            b"data: stream-byte-limit-body-canary"
+            + b"x" * (MAX_EVENT_DATA_CHARS + 1)
+            + b"\n\n",
+            "stream-byte-limit-body-canary",
+        ),
+    ],
+    ids=["malformed-sse", "byte-limit"],
+)
+async def test_stream_protocol_failure_precedes_response_close_cancellation(
+    body: bytes,
+    body_canary: str,
+) -> None:
+    """Primary SSE protocol outcomes remain safe over close cancellation."""
+    close_cancellation = asyncio.CancelledError(
+        "stream-primary-secondary-close-cancellation"
+    )
+    header_canary = "stream-protocol-cancellation-header-canary"
+    request_document: dict[str, object] = {
+        "model": "hermes",
+        "private": "stream-protocol-cancellation-request-canary",
+    }
+    response_stream = TrackingAsyncByteStream(
+        (body,),
+        close_failure=close_cancellation,
+    )
+    responses: list[httpx.Response] = []
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        response = httpx.Response(
+            200,
+            headers={"x-private-response-header": header_canary},
+            request=request,
+            stream=response_stream,
+        )
+        responses.append(response)
+        return response
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(HermesProtocolError) as failure:
+                await anext(client.stream_chat_events(request_document))
+
+        error = failure.value
+        assert type(error) is HermesProtocolError
+        assert error.category is FailureCategory.PROTOCOL
+        assert error.status_code is None
+        assert error.retryable is False
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        assert error is not close_cancellation
+        assert response_stream.closed is True
+        assert injected_http_client.is_closed is False
+        _assert_no_sensitive_traceback_references(
+            error,
+            canaries=(
+                "stream-primary-secondary-close-cancellation",
+                body_canary,
+                "stream-protocol-cancellation-request-canary",
+                header_canary,
+                _BASE_URL_CANARY,
+                _BEARER_KEY_CANARY,
+            ),
+            forbidden_objects=(
+                close_cancellation,
+                client,
+                injected_http_client,
+                response_stream,
+                responses[0],
+                requests[0],
+                client._headers,  # pyright: ignore[reportPrivateUsage]
+                request_document,
+                body,
+            ),
+        )
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_capability_response_close_cancellation_preserves_identity() -> None:
     """Capability cleanup cancellation remains the original cancellation object."""
     cancellation = asyncio.CancelledError("capability-close-cancellation")
@@ -1270,6 +1445,42 @@ async def test_stream_read_cancellation_precedes_response_close_failure() -> Non
     response_stream = TrackingAsyncByteStream(
         (),
         close_failure=RuntimeError("stream-close-secondary-canary"),
+        iteration_failure=cancellation,
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, stream=response_stream)
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(asyncio.CancelledError) as failure:
+                await anext(client.stream_chat_events({"model": "hermes"}))
+
+        assert failure.value is cancellation
+        assert failure.value.__cause__ is None
+        assert failure.value.__context__ is None
+        assert response_stream.closed is True
+        assert injected_http_client.is_closed is False
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_read_cancellation_precedes_response_close_cancellation() -> None:
+    """A primary stream read cancellation wins over actual close cancellation."""
+    cancellation = asyncio.CancelledError("stream-read-primary-cancellation")
+    close_cancellation = asyncio.CancelledError(
+        "stream-read-secondary-close-cancellation"
+    )
+    response_stream = TrackingAsyncByteStream(
+        (),
+        close_failure=close_cancellation,
         iteration_failure=cancellation,
     )
 
