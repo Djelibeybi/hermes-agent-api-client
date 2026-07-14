@@ -202,16 +202,19 @@ def _declared_content_length(response: httpx.Response) -> tuple[bool, int | None
     return (True, length)
 
 
-async def _read_capabilities_body(  # noqa: C901, PLR0912
+async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
     http_client: httpx.AsyncClient,
     endpoint: httpx.URL,
     headers: Mapping[str, str],
-) -> bytes | None:
-    """Read one capability response incrementally within the byte budget."""
+) -> HermesCapabilities | None:
+    """Read and validate one bounded capability response within its byte budget."""
     payload = bytearray()
     response: httpx.Response | None = None
     cancellation: asyncio.CancelledError | None = None
     status_code: int | None = None
+    protocol_failed = False
+    chunk = b""
+    capabilities: HermesCapabilities | None = None
     try:
         async with http_client.stream(
             "GET",
@@ -235,13 +238,24 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912
                             payload.extend(chunk)
                     if not valid_length:
                         return None
+                    capabilities = _parse_capabilities_payload(bytes(payload))
+                    protocol_failed = capabilities is None
             except asyncio.CancelledError as caught:
                 cancellation = caught.with_traceback(None)
     except asyncio.CancelledError:
         if cancellation is None:
             raise
     except Exception:
-        if cancellation is None and status_code is None:
+        if (
+            cancellation is None
+            and status_code is None
+            and not protocol_failed
+            and response is not None
+            and response.is_closed
+        ):
+            capabilities = _parse_capabilities_payload(bytes(payload))
+            protocol_failed = capabilities is None
+        if cancellation is None and status_code is None and not protocol_failed:
             raise
     if cancellation is not None:
         response = None
@@ -255,7 +269,15 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912
         payload = bytearray()
         del http_client, endpoint, headers
         raise _status_failure(status_code)
-    return bytes(payload)
+    if protocol_failed:
+        response = None
+        chunk = b""
+        payload.clear()
+        payload = bytearray()
+        capabilities = None
+        del http_client, endpoint, headers
+        _raise_protocol_failure()
+    return capabilities
 
 
 def _load_json(payload: bytes) -> tuple[bool, object]:
@@ -266,19 +288,30 @@ def _load_json(payload: bytes) -> tuple[bool, object]:
         return (False, None)
 
 
-async def _probe_capabilities(  # pyright: ignore[reportUnusedFunction]  # noqa: C901
+def _parse_capabilities_payload(payload: bytes) -> HermesCapabilities | None:
+    """Parse one bounded capability payload or return no result when invalid."""
+    valid_json, document = _load_json(payload)
+    if not valid_json:
+        return None
+    try:
+        return validate_capabilities(document)
+    except HermesProtocolError:
+        return None
+
+
+async def _probe_capabilities(  # pyright: ignore[reportUnusedFunction]
     http_client: httpx.AsyncClient,
     base_url: httpx.URL,
     headers: Mapping[str, str],
 ) -> HermesCapabilities:
     """Fetch and validate bounded capabilities using a caller-owned client."""
     endpoint = _operation_url(base_url, "/v1/capabilities")
-    payload: bytes | None = None
+    capabilities: HermesCapabilities | None = None
     status_failure: HermesContractError | None = None
     transport_failed = False
     try:
         async with asyncio.timeout(_CAPABILITIES_DEADLINE_SECONDS):
-            payload = await _read_capabilities_body(http_client, endpoint, headers)
+            capabilities = await _read_capabilities_body(http_client, endpoint, headers)
     except TimeoutError:
         transport_failed = True
     except HermesContractError as error:
@@ -289,35 +322,16 @@ async def _probe_capabilities(  # pyright: ignore[reportUnusedFunction]  # noqa:
         transport_failed = True
     if transport_failed:
         del http_client, base_url, headers, endpoint
-        payload = None
+        capabilities = None
         _raise_transport_failure(transient=True)
     if status_failure is not None:
         del http_client, base_url, headers, endpoint
-        payload = None
+        capabilities = None
         raise status_failure
-    if payload is None:
+    if capabilities is None:
         del http_client, base_url, headers, endpoint
         _raise_protocol_failure()
-
-    valid_json, document = _load_json(payload)
-    if not valid_json:
-        del http_client, base_url, headers, endpoint
-        payload = None
-        document = None
-        _raise_protocol_failure()
-
-    capabilities: HermesCapabilities | None = None
-    invalid_capabilities = False
-    try:
-        capabilities = validate_capabilities(document)
-    except HermesProtocolError:
-        invalid_capabilities = True
-    if invalid_capabilities:
-        del http_client, base_url, headers, endpoint
-        payload = None
-        document = None
-        _raise_protocol_failure()
-    return cast("HermesCapabilities", capabilities)
+    return capabilities
 
 
 async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]  # noqa: C901, PLR0912, PLR0915
@@ -501,9 +515,11 @@ class HermesAgentApiClient:
             except Exception:  # noqa: BLE001 - translate opaque cleanup failures safely
                 cleanup_failed = True
         active = None
+        if body_failed:
+            return
         if cleanup_cancellation is not None:
             _reraise_scrubbed_failure(cleanup_cancellation)
-        if cleanup_failed and not body_failed:
+        if cleanup_failed:
             _raise_transport_failure(transient=True)
 
     def _require_active_client(self) -> httpx.AsyncClient:
@@ -575,18 +591,17 @@ class HermesAgentApiClient:
             async for event in delegated_stream:
                 yield event
         except BaseException as caught:  # noqa: BLE001 - scrub on cancellation too
-            caught = caught.with_traceback(None)
-            operation_failure = caught
+            if not isinstance(caught, GeneratorExit):
+                caught = caught.with_traceback(None)
+                operation_failure = caught
         finally:
-            close_failure: BaseException | None = None
             if isinstance(delegated_stream, _SupportsAclose):
                 try:
                     await delegated_stream.aclose()
                 except BaseException as caught:  # noqa: BLE001 - preserve close error
                     caught = caught.with_traceback(None)
-                    close_failure = caught
-            if close_failure is not None:
-                operation_failure = close_failure
+                    if operation_failure is None:
+                        operation_failure = caught
         active = None
         base_url = None
         headers = {}

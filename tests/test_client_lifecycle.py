@@ -172,6 +172,31 @@ class CancellingCloseHermesEvents(UnclosableHermesEvents):
         raise self.cancellation
 
 
+class FailingCloseHermesEvents:
+    """Raise one primary iteration failure and a distinct close cancellation."""
+
+    def __init__(
+        self,
+        primary_failure: BaseException,
+        close_cancellation: asyncio.CancelledError,
+    ) -> None:
+        """Store exact primary and secondary failures for identity assertions."""
+        self.primary_failure = primary_failure
+        self.close_cancellation = close_cancellation
+
+    def __aiter__(self) -> FailingCloseHermesEvents:
+        """Return this iterator for one public delegated stream."""
+        return self
+
+    async def __anext__(self) -> HermesEvent:
+        """Raise the configured primary failure while reading the stream."""
+        raise self.primary_failure
+
+    async def aclose(self) -> None:
+        """Raise the distinct cancellation while public cleanup runs."""
+        raise self.close_cancellation
+
+
 def _package_traceback_locals(error: BaseException) -> tuple[dict[str, object], ...]:
     """Snapshot package-owned traceback locals for lifecycle secrecy checks."""
     frames: list[dict[str, object]] = []
@@ -457,6 +482,62 @@ async def test_context_body_error_precedes_owned_client_close_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_context_body_runtime_failure_precedes_owned_close_cancellation() -> None:
+    """A body runtime error remains primary over owned-close cancellation."""
+    body_failure = RuntimeError("context-body-primary-canary")
+    close_cancellation = asyncio.CancelledError("owned-close-secondary-cancellation")
+    owned_http_client = httpx.AsyncClient(
+        transport=RaisingCloseTransport(close_cancellation)
+    )
+    factory = AsyncClientFactorySpy(owned_http_client)
+    client = HermesAgentApiClient(_BASE_URL_CANARY, _BEARER_KEY_CANARY)
+
+    with (
+        patch("hermes_agent_api_client.client.httpx.AsyncClient", new=factory),
+        pytest.raises(RuntimeError) as failure,
+    ):
+        async with client:
+            raise body_failure
+
+    assert failure.value is body_failure
+    assert failure.value.__cause__ is None
+    assert failure.value.__context__ is None
+    assert "owned-close-secondary-cancellation" not in "".join(
+        traceback.format_exception(failure.value)
+    )
+    assert client._active_http_client is None  # pyright: ignore[reportPrivateUsage]
+    assert client._exited is True  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_context_body_cancellation_precedes_owned_close_cancellation() -> None:
+    """The exact body cancellation remains primary over owned-close cancellation."""
+    body_cancellation = asyncio.CancelledError("context-body-primary-cancellation")
+    close_cancellation = asyncio.CancelledError("owned-close-secondary-cancellation")
+    owned_http_client = httpx.AsyncClient(
+        transport=RaisingCloseTransport(close_cancellation)
+    )
+    factory = AsyncClientFactorySpy(owned_http_client)
+    client = HermesAgentApiClient(_BASE_URL_CANARY, _BEARER_KEY_CANARY)
+
+    with (
+        patch("hermes_agent_api_client.client.httpx.AsyncClient", new=factory),
+        pytest.raises(asyncio.CancelledError) as failure,
+    ):
+        async with client:
+            raise body_cancellation
+
+    assert failure.value is body_cancellation
+    assert failure.value.__cause__ is None
+    assert failure.value.__context__ is None
+    assert "owned-close-secondary-cancellation" not in "".join(
+        traceback.format_exception(failure.value)
+    )
+    assert client._active_http_client is None  # pyright: ignore[reportPrivateUsage]
+    assert client._exited is True  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
 async def test_injected_client_is_never_closed() -> None:
     """Exiting the wrapper never closes an injected HTTP client."""
     injected_http_client = httpx.AsyncClient()
@@ -583,6 +664,90 @@ async def test_capability_status_failure_precedes_response_close_failure() -> No
             canaries=(
                 "capability-status-close-canary",
                 "capability-status-body-canary",
+                header_canary,
+                _BASE_URL_CANARY,
+                _BEARER_KEY_CANARY,
+            ),
+            forbidden_objects=(
+                raw_failure,
+                client,
+                injected_http_client,
+                response_stream,
+                responses[0],
+                requests[0],
+                client._headers,  # pyright: ignore[reportPrivateUsage]
+                body,
+            ),
+        )
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "body_canary"),
+    [
+        (b"capability-malformed-json-canary", "capability-malformed-json-canary"),
+        (
+            b'{"platform":"capability-invalid-shape-canary"}',
+            "capability-invalid-shape-canary",
+        ),
+    ],
+    ids=["malformed-json", "invalid-shape"],
+)
+async def test_capability_protocol_failure_precedes_response_close_failure(
+    body: bytes,
+    body_canary: str,
+) -> None:
+    """A malformed capability body remains protocol failure over close failure."""
+    raw_failure = RuntimeError("capability-protocol-close-canary")
+    header_canary = "capability-protocol-header-canary"
+    response_stream = TrackingAsyncByteStream((body,), close_failure=raw_failure)
+    responses: list[httpx.Response] = []
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        response = httpx.Response(
+            200,
+            headers={"x-private-response-header": header_canary},
+            request=request,
+            stream=response_stream,
+        )
+        responses.append(response)
+        return response
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(HermesProtocolError) as failure:
+                await client.probe_capabilities()
+            assert client._active_http_client is injected_http_client  # pyright: ignore[reportPrivateUsage]
+
+        error = failure.value
+        assert type(error) is HermesProtocolError
+        assert error.category is FailureCategory.PROTOCOL
+        assert error.status_code is None
+        assert error.retryable is False
+        assert str(error) == "Hermes protocol failure (status=none, retryable=false)"
+        assert repr(error) == (
+            "HermesProtocolError(category='protocol', status_code=None, "
+            "retryable=False)"
+        )
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        assert response_stream.closed is True
+        assert injected_http_client.is_closed is False
+        _assert_no_sensitive_traceback_references(
+            error,
+            canaries=(
+                "capability-protocol-close-canary",
+                body_canary,
                 header_canary,
                 _BASE_URL_CANARY,
                 _BEARER_KEY_CANARY,
@@ -1212,6 +1377,67 @@ async def test_delegated_close_preserves_cancellation_and_scrubs_iterator() -> N
         for frame_locals in _package_traceback_locals(failure.value):
             assert all(value is not delegated_stream for value in frame_locals.values())
             assert frame_locals.get("delegated_stream") is None
+        assert injected_http_client.is_closed is False
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "primary_failure",
+    [
+        RuntimeError("delegated-primary-operation-canary"),
+        asyncio.CancelledError("delegated-primary-cancellation"),
+    ],
+    ids=["runtime-error", "cancellation"],
+)
+async def test_delegated_primary_failure_precedes_close_cancellation(
+    primary_failure: BaseException,
+) -> None:
+    """Delegated operation failures remain primary over close cancellation."""
+    close_cancellation = asyncio.CancelledError(
+        "delegated-close-secondary-cancellation"
+    )
+    delegated_stream = FailingCloseHermesEvents(
+        primary_failure,
+        close_cancellation,
+    )
+
+    def delegate(
+        _http_client: httpx.AsyncClient,
+        _base_url: httpx.URL,
+        _headers: Mapping[str, str],
+        _request: Mapping[str, object],
+    ) -> AsyncIterator[HermesEvent]:
+        return delegated_stream
+
+    injected_http_client = httpx.AsyncClient()
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        with patch(
+            "hermes_agent_api_client.client._stream_chat_events",
+            new=delegate,
+        ):
+            async with client:
+                with pytest.raises(type(primary_failure)) as failure:
+                    await anext(client.stream_chat_events({"model": "hermes"}))
+
+        assert failure.value is primary_failure
+        assert failure.value.__cause__ is None
+        assert failure.value.__context__ is None
+        assert "delegated-close-secondary-cancellation" not in "".join(
+            traceback.format_exception(failure.value)
+        )
+        for frame_locals in _package_traceback_locals(failure.value):
+            assert all(value is not delegated_stream for value in frame_locals.values())
+            assert frame_locals.get("delegated_stream") is None
+            assert all(
+                value is not close_cancellation for value in frame_locals.values()
+            )
         assert injected_http_client.is_closed is False
     finally:
         await injected_http_client.aclose()
