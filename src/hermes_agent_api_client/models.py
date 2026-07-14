@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict
 
 
 class _FrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, strict=True)
 
 
 class FailureCategory(StrEnum):

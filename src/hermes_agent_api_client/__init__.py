@@ -1,5 +1,6 @@
 """Typed async client for the Hermes Agent API Server."""
 
+from .client import HermesAgentApiClient
 from .models import (
     AssistantDeltaEvent,
     HermesCapabilities,
@@ -22,6 +23,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "AssistantDeltaEvent",
+    "HermesAgentApiClient",
     "HermesAuthenticationError",
     "HermesCapabilities",
     "HermesContractError",

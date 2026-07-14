@@ -20,7 +20,10 @@ from .protocol import (
 from .sse import async_decode_hermes_sse
 
 if TYPE_CHECKING:
+    import ssl
     from collections.abc import AsyncIterator, Mapping
+    from types import TracebackType
+    from typing import Self
 
 
 _CAPABILITY_REQUEST_TIMEOUT = httpx.Timeout(10.0)
@@ -40,6 +43,30 @@ _SUPPORTED_SCHEMES = frozenset({"http", "https"})
 _VISIBLE_ASCII_MIN = 0x21
 _VISIBLE_ASCII_MAX = 0x7E
 _MAX_CONTENT_LENGTH_DIGITS = 20
+
+_INACTIVE_CLIENT_MESSAGE = "HermesAgentApiClient is not active"
+_SINGLE_USE_CLIENT_MESSAGE = "HermesAgentApiClient instances are single-use"
+_VERIFY_INJECTION_MESSAGE = "verify cannot be supplied with an injected HTTP client"
+
+
+def _raise_inactive_client() -> Never:
+    """Raise the constant inactive error from a secret-free frame."""
+    raise RuntimeError(_INACTIVE_CLIENT_MESSAGE)
+
+
+def _raise_single_use_client() -> Never:
+    """Raise the constant single-use error from a secret-free frame."""
+    raise RuntimeError(_SINGLE_USE_CLIENT_MESSAGE)
+
+
+def _raise_verify_injection_conflict() -> Never:
+    """Raise the constant injection conflict from a secret-free frame."""
+    raise ValueError(_VERIFY_INJECTION_MESSAGE)
+
+
+def _reraise_scrubbed_failure(failure: BaseException) -> Never:
+    """Re-raise a failure after its package traceback state was scrubbed."""
+    raise failure
 
 
 def _raise_transport_failure(*, transient: bool) -> Never:
@@ -314,3 +341,163 @@ async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]
     request_headers.clear()
     request_body = b""
     yield terminal_event
+
+
+class HermesAgentApiClient:
+    """Single-use async context manager for bound Hermes operations."""
+
+    def __init__(
+        self,
+        base_url: str,
+        bearer_key: str,
+        *,
+        http_client: httpx.AsyncClient | None = None,
+        verify: ssl.SSLContext | bool | None = None,
+    ) -> None:
+        """Bind endpoint, authentication, ownership, and TLS verification."""
+        if http_client is not None and verify is not None:
+            base_url = ""
+            bearer_key = ""
+            http_client = None
+            verify = None
+            del self
+            _raise_verify_injection_conflict()
+        bound_base_url: httpx.URL | None = None
+        bound_headers: dict[str, str] | None = None
+        binding_failure: BaseException | None = None
+        try:
+            bound_base_url = _normalize_base_url(base_url)
+            bound_headers = _request_headers(bearer_key)
+        except BaseException as caught:  # noqa: BLE001 - scrub on interruption
+            caught = caught.with_traceback(None)
+            binding_failure = caught
+        base_url = ""
+        bearer_key = ""
+        if binding_failure is not None:
+            bound_base_url = None
+            bound_headers = None
+            http_client = None
+            verify = None
+            del self
+            _reraise_scrubbed_failure(binding_failure)
+        self._base_url = cast("httpx.URL", bound_base_url)
+        self._headers = cast("dict[str, str]", bound_headers)
+        self._injected_http_client = http_client
+        self._verify = True if verify is None else verify
+        self._active_http_client: httpx.AsyncClient | None = None
+        self._entered = False
+        self._exited = False
+
+    async def __aenter__(self) -> Self:
+        """Activate this instance exactly once and create owned transport."""
+        if self._entered or self._exited:
+            del self
+            _raise_single_use_client()
+        active = self._injected_http_client
+        if active is None:
+            creation_failure: BaseException | None = None
+            try:
+                active = httpx.AsyncClient(
+                    verify=self._verify,
+                    follow_redirects=False,
+                )
+            except BaseException as caught:  # noqa: BLE001 - scrub on interruption
+                caught = caught.with_traceback(None)
+                creation_failure = caught
+            if creation_failure is not None:
+                del self
+                _reraise_scrubbed_failure(creation_failure)
+        self._active_http_client = active
+        self._entered = True
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Deactivate this instance and close only an owned HTTP client."""
+        active = self._active_http_client
+        self._active_http_client = None
+        self._exited = True
+        owns_active = active is not None and self._injected_http_client is None
+        del self, exc_type, exc_value, traceback
+        if owns_active:
+            await cast("httpx.AsyncClient", active).aclose()
+
+    def _require_active_client(self) -> httpx.AsyncClient:
+        """Return the active HTTP client or reject out-of-lifecycle use."""
+        active = self._active_http_client
+        if active is None:
+            del self
+            _raise_inactive_client()
+        return active
+
+    async def probe_capabilities(self) -> HermesCapabilities:
+        """Fetch capabilities using this client's bound endpoint and auth."""
+        active: httpx.AsyncClient | None = None
+        inactive = False
+        try:
+            active = self._require_active_client()
+        except RuntimeError as failure:
+            failure.__traceback__ = None
+            inactive = True
+        if inactive or active is None:
+            del self
+            _raise_inactive_client()
+        base_url: httpx.URL | None = self._base_url
+        headers: Mapping[str, str] = self._headers
+        del self
+        result: HermesCapabilities | None = None
+        failure: BaseException | None = None
+        try:
+            result = await _probe_capabilities(active, base_url, headers)
+        except BaseException as caught:  # noqa: BLE001 - scrub on cancellation too
+            caught = caught.with_traceback(None)
+            failure = caught
+        active = None
+        base_url = None
+        headers = {}
+        if failure is not None:
+            _reraise_scrubbed_failure(failure)
+        return cast("HermesCapabilities", result)
+
+    async def stream_chat_events(
+        self,
+        request: Mapping[str, object],
+    ) -> AsyncIterator[HermesEvent]:
+        """Stream chat events using this client's bound endpoint and auth."""
+        active: httpx.AsyncClient | None = None
+        inactive = False
+        try:
+            active = self._require_active_client()
+        except RuntimeError as failure:
+            failure.__traceback__ = None
+            inactive = True
+        if inactive or active is None:
+            del self
+            _raise_inactive_client()
+        base_url: httpx.URL | None = self._base_url
+        headers: Mapping[str, str] = self._headers
+        del self
+        event: HermesEvent | None = None
+        operation_failure: BaseException | None = None
+        try:
+            async for event in _stream_chat_events(
+                active,
+                base_url,
+                headers,
+                request,
+            ):
+                yield event
+        except BaseException as caught:  # noqa: BLE001 - scrub on cancellation too
+            caught = caught.with_traceback(None)
+            operation_failure = caught
+        active = None
+        base_url = None
+        headers = {}
+        request = {}
+        event = None
+        if operation_failure is not None:
+            _reraise_scrubbed_failure(operation_failure)

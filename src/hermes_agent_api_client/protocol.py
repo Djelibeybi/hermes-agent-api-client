@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import (
     BaseModel,
@@ -146,7 +146,11 @@ _SERVER_ERROR_MAX = 599
 
 
 class _WireModel(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="ignore",
+        frozen=True,
+        strict=True,
+    )
 
 
 class _AuthWire(_WireModel):

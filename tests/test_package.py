@@ -22,3 +22,26 @@ def test_public_version_is_static() -> None:
     import hermes_agent_api_client  # noqa: PLC0415
 
     assert hermes_agent_api_client.__version__ == "0.1.0"
+
+
+def test_public_exports_are_exact() -> None:
+    """The package exports only the approved typed public API."""
+    import hermes_agent_api_client  # noqa: PLC0415
+
+    assert set(hermes_agent_api_client.__all__) == {
+        "AssistantDeltaEvent",
+        "HermesAgentApiClient",
+        "HermesAuthenticationError",
+        "HermesCapabilities",
+        "HermesContractError",
+        "HermesEvent",
+        "HermesHttpStatusError",
+        "HermesProtocolError",
+        "HermesTransportError",
+        "KeepaliveEvent",
+        "TerminalEvent",
+        "TerminalOutcome",
+        "ToolProgressEvent",
+        "UsageEvent",
+        "__version__",
+    }
