@@ -531,6 +531,78 @@ async def test_capability_response_close_failure_becomes_fresh_transport_error()
 
 
 @pytest.mark.asyncio
+async def test_capability_status_failure_precedes_response_close_failure() -> None:
+    """A capability status failure remains typed when response cleanup also fails."""
+    raw_failure = RuntimeError("capability-status-close-canary")
+    body = b"capability-status-body-canary"
+    header_canary = "capability-status-header-canary"
+    response_stream = TrackingAsyncByteStream((body,), close_failure=raw_failure)
+    responses: list[httpx.Response] = []
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        response = httpx.Response(
+            _UPSTREAM_STATUS_CODE,
+            headers={"x-private-response-header": header_canary},
+            request=request,
+            stream=response_stream,
+        )
+        responses.append(response)
+        return response
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(HermesHttpStatusError) as failure:
+                await client.probe_capabilities()
+            assert client._active_http_client is injected_http_client  # pyright: ignore[reportPrivateUsage]
+
+        error = failure.value
+        assert type(error) is HermesHttpStatusError
+        assert not isinstance(error, HermesTransportError)
+        assert error.category is FailureCategory.HTTP_STATUS
+        assert error.status_code == _UPSTREAM_STATUS_CODE
+        assert error.retryable is True
+        assert str(error) == "Hermes http_status failure (status=503, retryable=true)"
+        assert repr(error) == (
+            "HermesHttpStatusError(category='http_status', status_code=503, "
+            "retryable=True)"
+        )
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        assert response_stream.closed is True
+        assert injected_http_client.is_closed is False
+        _assert_no_sensitive_traceback_references(
+            error,
+            canaries=(
+                "capability-status-close-canary",
+                "capability-status-body-canary",
+                header_canary,
+                _BASE_URL_CANARY,
+                _BEARER_KEY_CANARY,
+            ),
+            forbidden_objects=(
+                raw_failure,
+                client,
+                injected_http_client,
+                response_stream,
+                responses[0],
+                requests[0],
+                client._headers,  # pyright: ignore[reportPrivateUsage]
+                body,
+            ),
+        )
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_stream_response_close_failure_after_delta_becomes_transport_error() -> (
     None
 ):

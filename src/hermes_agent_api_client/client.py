@@ -202,7 +202,7 @@ def _declared_content_length(response: httpx.Response) -> tuple[bool, int | None
     return (True, length)
 
 
-async def _read_capabilities_body(  # noqa: C901
+async def _read_capabilities_body(  # noqa: C901, PLR0912
     http_client: httpx.AsyncClient,
     endpoint: httpx.URL,
     headers: Mapping[str, str],
@@ -211,6 +211,7 @@ async def _read_capabilities_body(  # noqa: C901
     payload = bytearray()
     response: httpx.Response | None = None
     cancellation: asyncio.CancelledError | None = None
+    status_code: int | None = None
     try:
         async with http_client.stream(
             "GET",
@@ -220,23 +221,27 @@ async def _read_capabilities_body(  # noqa: C901
             follow_redirects=False,
         ) as response:
             try:
-                response.raise_for_status()
-                valid_length, _ = _declared_content_length(response)
-                if valid_length:
-                    async for chunk in response.aiter_bytes():
-                        if len(chunk) > _MAX_CAPABILITIES_BYTES - len(payload):
-                            valid_length = False
-                            break
-                        payload.extend(chunk)
-                if not valid_length:
-                    return None
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as error:
+                    status_code = error.response.status_code
+                else:
+                    valid_length, _ = _declared_content_length(response)
+                    if valid_length:
+                        async for chunk in response.aiter_bytes():
+                            if len(chunk) > _MAX_CAPABILITIES_BYTES - len(payload):
+                                valid_length = False
+                                break
+                            payload.extend(chunk)
+                    if not valid_length:
+                        return None
             except asyncio.CancelledError as caught:
                 cancellation = caught.with_traceback(None)
     except asyncio.CancelledError:
         if cancellation is None:
             raise
     except Exception:
-        if cancellation is None:
+        if cancellation is None and status_code is None:
             raise
     if cancellation is not None:
         response = None
@@ -244,6 +249,12 @@ async def _read_capabilities_body(  # noqa: C901
         payload = bytearray()
         del http_client, endpoint, headers
         _reraise_scrubbed_failure(cancellation)
+    if status_code is not None:
+        response = None
+        payload.clear()
+        payload = bytearray()
+        del http_client, endpoint, headers
+        raise _status_failure(status_code)
     return bytes(payload)
 
 
@@ -270,8 +281,8 @@ async def _probe_capabilities(  # pyright: ignore[reportUnusedFunction]  # noqa:
             payload = await _read_capabilities_body(http_client, endpoint, headers)
     except TimeoutError:
         transport_failed = True
-    except httpx.HTTPStatusError as error:
-        status_failure = _status_failure(error.response.status_code)
+    except HermesContractError as error:
+        status_failure = error
     except httpx.RequestError:
         transport_failed = True
     except Exception:  # noqa: BLE001 - translate opaque cleanup failures safely
