@@ -385,6 +385,8 @@ async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]  # noqa:
                                 yield event
                     except HermesProtocolError:
                         protocol_failed = True
+                    except HermesTransportError:
+                        transport_failure = HermesTransportError(transient=True)
             except asyncio.CancelledError as caught:
                 cancellation = caught.with_traceback(None)
     except asyncio.CancelledError as caught:

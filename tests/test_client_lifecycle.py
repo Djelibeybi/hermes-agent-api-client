@@ -21,6 +21,7 @@ from hermes_agent_api_client import (
     HermesHttpStatusError,
     HermesProtocolError,
     HermesTransportError,
+    KeepaliveEvent,
     TerminalEvent,
     TerminalOutcome,
 )
@@ -1133,6 +1134,89 @@ async def test_stream_protocol_failure_precedes_response_close_failure() -> None
                 requests[0],
                 client._headers,  # pyright: ignore[reportPrivateUsage]
                 body,
+            ),
+        )
+        assert response_stream.closed is True
+        assert injected_http_client.is_closed is False
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_transport_failure_precedes_response_close_cancellation() -> None:
+    """A primary decoder transport failure outranks close cancellation."""
+    raw_source_failure = RuntimeError("stream-primary-read-transport-canary")
+    close_cancellation = asyncio.CancelledError(
+        "stream-primary-transport-secondary-close-cancellation"
+    )
+    body_canary = "stream-primary-read-transport-body-canary"
+    header_canary = "stream-primary-read-transport-header-canary"
+    request_document: dict[str, object] = {
+        "model": "hermes",
+        "private": "stream-primary-read-transport-request-canary",
+    }
+    body = f": {body_canary}\n\n".encode()
+    response_stream = TrackingAsyncByteStream(
+        (body,),
+        close_failure=close_cancellation,
+        iteration_failure=raw_source_failure,
+    )
+    responses: list[httpx.Response] = []
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        response = httpx.Response(
+            200,
+            headers={"x-private-response-header": header_canary},
+            request=request,
+            stream=response_stream,
+        )
+        responses.append(response)
+        return response
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            public_stream = cast(
+                "AsyncGenerator[HermesEvent]",
+                client.stream_chat_events(request_document),
+            )
+            event = await anext(public_stream)
+            assert event == KeepaliveEvent()
+
+            with pytest.raises(HermesTransportError) as failure:
+                await anext(public_stream)
+
+        error = failure.value
+        _assert_fresh_cleanup_transport_failure(
+            error,
+            raw_error=raw_source_failure,
+            canaries=(
+                "stream-primary-read-transport-canary",
+                "stream-primary-transport-secondary-close-cancellation",
+                body_canary,
+                header_canary,
+                "stream-primary-read-transport-request-canary",
+                _BASE_URL_CANARY,
+                _BEARER_KEY_CANARY,
+            ),
+            forbidden_objects=(
+                close_cancellation,
+                client,
+                injected_http_client,
+                response_stream,
+                responses[0],
+                requests[0],
+                client._headers,  # pyright: ignore[reportPrivateUsage]
+                request_document,
+                body,
+                event,
             ),
         )
         assert response_stream.closed is True
