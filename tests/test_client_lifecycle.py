@@ -2,23 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
 import ssl
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 import httpx
 import pytest
 
 from hermes_agent_api_client import (
+    AssistantDeltaEvent,
     HermesAgentApiClient,
+    HermesEvent,
     HermesTransportError,
     TerminalEvent,
+    TerminalOutcome,
 )
 from tests.helpers.hermes import load_golden_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
     from types import TracebackType
 
 
@@ -62,6 +66,58 @@ class RaisingCloseTransport(httpx.AsyncBaseTransport):
     async def aclose(self) -> None:
         """Raise the controlled close failure."""
         raise RuntimeError(self.failure_message)
+
+
+class TrackingAsyncByteStream(httpx.AsyncByteStream):
+    """Yield controlled SSE bytes and record response-scope closure."""
+
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        """Store chunks and initialize the close marker."""
+        self.chunks = chunks
+        self.closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        """Yield each configured chunk cooperatively."""
+        for chunk in self.chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        """Record response cleanup."""
+        self.closed = True
+
+
+class UnclosableHermesEvents:
+    """A valid delegated event iterator without optional close support."""
+
+    def __init__(self, events: tuple[HermesEvent, ...]) -> None:
+        """Store deterministic events for asynchronous iteration."""
+        self.events = iter(events)
+
+    def __aiter__(self) -> UnclosableHermesEvents:
+        """Return this asynchronous iterator."""
+        return self
+
+    async def __anext__(self) -> HermesEvent:
+        """Return the next event cooperatively."""
+        await asyncio.sleep(0)
+        try:
+            return next(self.events)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
+class CancellingCloseHermesEvents(UnclosableHermesEvents):
+    """A delegated iterator whose explicit close is cancelled."""
+
+    def __init__(self, cancellation: asyncio.CancelledError) -> None:
+        """Store the exact cancellation object for identity checks."""
+        super().__init__(())
+        self.cancellation = cancellation
+
+    async def aclose(self) -> None:
+        """Raise the exact configured cancellation."""
+        await asyncio.sleep(0)
+        raise self.cancellation
 
 
 def _package_traceback_locals(error: BaseException) -> tuple[dict[str, object], ...]:
@@ -277,6 +333,130 @@ async def test_injected_client_is_never_closed() -> None:
         await injected_http_client.aclose()
 
 
+@pytest.mark.asyncio
+async def test_closing_public_stream_immediately_closes_delegated_response() -> None:
+    """Early public stream closure releases its delegated response immediately."""
+    response_stream = TrackingAsyncByteStream(
+        (
+            b'data: {"choices":[{"index":0,"delta":{"content":"hello"},'
+            b'"finish_reason":null}]}\n\n',
+        )
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, stream=response_stream)
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            public_stream = cast(
+                "AsyncGenerator[HermesEvent]",
+                client.stream_chat_events(
+                    {"model": "hermes", "messages": (), "stream": True}
+                ),
+            )
+            assert await anext(public_stream) == AssistantDeltaEvent(text="hello")
+            assert response_stream.closed is False
+
+            await public_stream.aclose()
+
+            assert response_stream.closed is True
+            assert injected_http_client.is_closed is False
+        assert injected_http_client.is_closed is False
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_public_stream_accepts_delegated_iterator_without_aclose() -> None:
+    """A delegated iterator need not expose optional close support."""
+    delegated_stream = UnclosableHermesEvents(
+        (
+            AssistantDeltaEvent(text="patched"),
+            TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+        )
+    )
+
+    def delegate(
+        _http_client: httpx.AsyncClient,
+        _base_url: httpx.URL,
+        _headers: Mapping[str, str],
+        _request: Mapping[str, object],
+    ) -> AsyncIterator[HermesEvent]:
+        return delegated_stream
+
+    injected_http_client = httpx.AsyncClient()
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        with patch(
+            "hermes_agent_api_client.client._stream_chat_events",
+            new=delegate,
+        ):
+            async with client:
+                events = tuple(
+                    [
+                        event
+                        async for event in client.stream_chat_events(
+                            {"model": "hermes"}
+                        )
+                    ]
+                )
+        assert events == (
+            AssistantDeltaEvent(text="patched"),
+            TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+        )
+        assert injected_http_client.is_closed is False
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_delegated_close_preserves_cancellation_and_scrubs_iterator() -> None:
+    """Delegated close cancellation keeps identity without retaining iterator."""
+    cancellation = asyncio.CancelledError()
+    delegated_stream = CancellingCloseHermesEvents(cancellation)
+
+    def delegate(
+        _http_client: httpx.AsyncClient,
+        _base_url: httpx.URL,
+        _headers: Mapping[str, str],
+        _request: Mapping[str, object],
+    ) -> AsyncIterator[HermesEvent]:
+        return delegated_stream
+
+    injected_http_client = httpx.AsyncClient()
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        with patch(
+            "hermes_agent_api_client.client._stream_chat_events",
+            new=delegate,
+        ):
+            async with client:
+                with pytest.raises(asyncio.CancelledError) as failure:
+                    await anext(client.stream_chat_events({"model": "hermes"}))
+
+        assert failure.value is cancellation
+        for frame_locals in _package_traceback_locals(failure.value):
+            assert all(value is not delegated_stream for value in frame_locals.values())
+            assert frame_locals.get("delegated_stream") is None
+        assert injected_http_client.is_closed is False
+    finally:
+        await injected_http_client.aclose()
+
+
 @pytest.mark.parametrize("verify", [False, ssl.create_default_context()])
 @pytest.mark.asyncio
 async def test_non_default_verify_is_rejected_with_injected_client(
@@ -440,6 +620,7 @@ async def test_operation_failures_scrub_bound_state_from_tracebacks() -> None:
             assert failure.retryable is True
             for frame_locals in _package_traceback_locals(failure):
                 assert all(value is not client for value in frame_locals.values())
+                assert frame_locals.get("delegated_stream") is None
                 rendered = repr(frame_locals)
                 assert _BASE_URL_CANARY not in rendered
                 assert _BEARER_KEY_CANARY not in rendered

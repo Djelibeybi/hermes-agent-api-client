@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Never, cast
+from typing import TYPE_CHECKING, Never, Protocol, cast, runtime_checkable
 
 import httpx
 
@@ -47,6 +47,14 @@ _MAX_CONTENT_LENGTH_DIGITS = 20
 _INACTIVE_CLIENT_MESSAGE = "HermesAgentApiClient is not active"
 _SINGLE_USE_CLIENT_MESSAGE = "HermesAgentApiClient instances are single-use"
 _VERIFY_INJECTION_MESSAGE = "verify cannot be supplied with an injected HTTP client"
+
+
+@runtime_checkable
+class _SupportsAclose(Protocol):
+    """An owned asynchronous iterator that supports explicit closure."""
+
+    async def aclose(self) -> None:
+        """Release the iterator's upstream resources."""
 
 
 def _raise_inactive_client() -> Never:
@@ -483,21 +491,35 @@ class HermesAgentApiClient:
         del self
         event: HermesEvent | None = None
         operation_failure: BaseException | None = None
-        try:
-            async for event in _stream_chat_events(
+        delegated_stream: AsyncIterator[HermesEvent] | None = aiter(
+            _stream_chat_events(
                 active,
                 base_url,
                 headers,
                 request,
-            ):
+            )
+        )
+        try:
+            async for event in delegated_stream:
                 yield event
         except BaseException as caught:  # noqa: BLE001 - scrub on cancellation too
             caught = caught.with_traceback(None)
             operation_failure = caught
+        finally:
+            close_failure: BaseException | None = None
+            if isinstance(delegated_stream, _SupportsAclose):
+                try:
+                    await delegated_stream.aclose()
+                except BaseException as caught:  # noqa: BLE001 - preserve close error
+                    caught = caught.with_traceback(None)
+                    close_failure = caught
+            if close_failure is not None:
+                operation_failure = close_failure
         active = None
         base_url = None
         headers = {}
         request = {}
         event = None
+        delegated_stream = None
         if operation_failure is not None:
             _reraise_scrubbed_failure(operation_failure)
