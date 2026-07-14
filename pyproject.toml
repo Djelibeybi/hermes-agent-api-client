@@ -68,8 +68,20 @@ ignore = ["COM812", "ISC001"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "SLF001"]
+"tests/helpers/hermes.py" = [
+  "ANN401",
+  "B905",
+  "EM101",
+  "I001",
+  "RUF007",
+  "TC003",
+  "TRY003",
+]
 
 [tool.pyright]
 include = ["src", "tests"]
+ignore = ["tests/helpers/hermes.py"]
 pythonVersion = "3.13"
 typeCheckingMode = "strict"
+venv = ".venv"
+venvPath = "."
