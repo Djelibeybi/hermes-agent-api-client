@@ -35,6 +35,9 @@ dev = [
   "respx==0.23.1",
   "ruff==0.15.21",
 ]
+release = [
+  "python-semantic-release==10.6.1",
+]
 
 [tool.uv]
 required-version = "==0.11.28"
@@ -42,6 +45,22 @@ default-groups = ["dev"]
 
 [tool.uv.build-backend]
 source-include = ["uv.lock"]
+
+[tool.semantic_release]
+allow_zero_version = true
+build_command = """
+  uv lock --upgrade-package "$PACKAGE_NAME"
+  uv build
+"""
+commit_message = "chore(release): {version} [skip ci]\n\nSigned-off-by: Avi Miller <me@dje.li>"
+major_on_zero = false
+version_toml = ["pyproject.toml:project.version"]
+
+[tool.semantic_release.commit_parser_options]
+ignore_merge_commits = true
+minor_tags = ["feat"]
+parse_squash_commits = true
+patch_tags = ["fix", "perf"]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
