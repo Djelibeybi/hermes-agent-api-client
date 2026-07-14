@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - run: uv sync --locked --all-groups --python "${{ matrix.python-version }}"
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run coverage run -m pytest
+      - run: uv run coverage report
+      - run: npx --yes pyright@1.1.411
+      - run: uv run npx --yes pyright@1.1.411 --verifytypes hermes_agent_api_client --ignoreexternal
+      - run: uv build
+      - run: uv run python scripts/verify_dist.py dist/*.whl dist/*.tar.gz
