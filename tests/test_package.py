@@ -32,6 +32,7 @@ _IMPORT_FAILURE_MESSAGE = (
 )
 _SDIST_MEMBER_LIMIT = 512
 _SDIST_UNCOMPRESSED_LIMIT = 10_000_000
+_SDIST_STREAM_LIMIT = 11_000_000
 
 
 @pytest.fixture(scope="module")
@@ -105,11 +106,16 @@ def _write_sdist_variant(
     *,
     transform: Callable[[tarfile.TarInfo], tarfile.TarInfo] | None = None,
     extra_members: tuple[tuple[tarfile.TarInfo, bytes], ...] = (),
+    archive_format: int = tarfile.PAX_FORMAT,
 ) -> None:
     """Stream-copy an sdist while transforming or adding hostile members."""
     with (
         tarfile.open(source_path, mode="r:gz") as source,
-        tarfile.open(target_path, mode="w:gz") as target,
+        tarfile.open(
+            target_path,
+            mode="w:gz",
+            format=archive_format,
+        ) as target,
     ):
         for member in source:
             output_member = transform(member) if transform is not None else member
@@ -639,6 +645,83 @@ def test_distribution_verifier_limits_sdist_uncompressed_size(
         sdist_path,
         variant_path,
         extra_members=(oversized_member,),
+    )
+
+    result = _run_distribution_verifier(wheel_path, variant_path)
+
+    _assert_verifier_rejection(
+        result,
+        expected_message=_INVALID_SDIST_CONTENTS_MESSAGE,
+        canary=canary,
+    )
+
+
+def test_distribution_verifier_limits_hidden_pax_header_bytes(
+    built_distributions: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    """Hidden PAX headers cannot bypass the hard decompressed-byte limit."""
+    wheel_path, sdist_path = built_distributions
+    variant_path = tmp_path / "oversized-pax-header.tar.gz"
+    canary = "sdist-pax-header-canary"
+    pax_member, payload = _regular_tar_member("package/pax-member", b"")
+    pax_member.pax_headers = {"comment": canary + ("x" * (_SDIST_STREAM_LIMIT + 1))}
+    _write_sdist_variant(
+        sdist_path,
+        variant_path,
+        extra_members=((pax_member, payload),),
+    )
+
+    result = _run_distribution_verifier(wheel_path, variant_path)
+
+    _assert_verifier_rejection(
+        result,
+        expected_message=_INVALID_SDIST_CONTENTS_MESSAGE,
+        canary=canary,
+    )
+
+
+def test_distribution_verifier_limits_hidden_gnu_long_name_bytes(
+    built_distributions: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    """GNU long-name records cannot bypass the decompressed-byte limit."""
+    wheel_path, sdist_path = built_distributions
+    variant_path = tmp_path / "oversized-gnu-long-name.tar.gz"
+    canary = "sdist-gnu-long-name-canary"
+    long_name = f"package/{canary}-" + ("x" * (_SDIST_STREAM_LIMIT + 1))
+    long_name_member = _regular_tar_member(long_name, b"")
+    _write_sdist_variant(
+        sdist_path,
+        variant_path,
+        extra_members=(long_name_member,),
+        archive_format=tarfile.GNU_FORMAT,
+    )
+
+    result = _run_distribution_verifier(wheel_path, variant_path)
+
+    _assert_verifier_rejection(
+        result,
+        expected_message=_INVALID_SDIST_CONTENTS_MESSAGE,
+        canary=canary,
+    )
+
+
+def test_distribution_verifier_rejects_gnu_sparse_members(
+    built_distributions: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    """GNU sparse entries are not ordinary regular release files."""
+    wheel_path, sdist_path = built_distributions
+    variant_path = tmp_path / "gnu-sparse.tar.gz"
+    canary = "sdist-gnu-sparse-canary"
+    sparse_member = tarfile.TarInfo(f"package/{canary}")
+    sparse_member.type = tarfile.GNUTYPE_SPARSE
+    _write_sdist_variant(
+        sdist_path,
+        variant_path,
+        extra_members=((sparse_member, b""),),
+        archive_format=tarfile.GNU_FORMAT,
     )
 
     result = _run_distribution_verifier(wheel_path, variant_path)

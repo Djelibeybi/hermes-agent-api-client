@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gzip
+import io
 import subprocess
 import sys
 import tarfile
@@ -73,6 +75,8 @@ _MAX_WHEEL_UNCOMPRESSED_BYTES = 10_000_000
 _MAX_METADATA_BYTES = 1_000_000
 _MAX_SDIST_MEMBERS = 512
 _MAX_SDIST_UNCOMPRESSED_BYTES = 10_000_000
+_MAX_SDIST_STREAM_BYTES = 11_000_000
+_ORDINARY_TAR_FILE_TYPES = frozenset({tarfile.REGTYPE, tarfile.AREGTYPE})
 _ISOLATED_IMPORT_SCRIPT = """
 import importlib
 import sys
@@ -91,6 +95,26 @@ if any(name not in namespace for name in exports):
 
 class VerificationError(Exception):
     """A distribution failed a verifier contract with a constant message."""
+
+
+class _BoundedReader(io.RawIOBase):
+    """Limit bytes returned from one decompressed source stream."""
+
+    def __init__(self, source: gzip.GzipFile, limit: int) -> None:
+        """Store the source and its hard cumulative byte limit."""
+        self._source = source
+        self._limit = limit
+        self._consumed = 0
+
+    def read(self, size: int = -1) -> bytes:
+        """Return bounded bytes or reject before crossing the hard limit."""
+        remaining = self._limit - self._consumed
+        requested = remaining + 1 if size < 0 or size > remaining else size
+        payload = self._source.read(requested)
+        if len(payload) > remaining:
+            _fail(_INVALID_SDIST_CONTENTS_MESSAGE)
+        self._consumed += len(payload)
+        return payload
 
 
 def _fail(message: str) -> Never:
@@ -248,7 +272,7 @@ def _record_sdist_member(
     if member.name in names or not _names_are_safe((member.name,)):
         _fail(_INVALID_SDIST_CONTENTS_MESSAGE)
     names.add(member.name)
-    if member.isfile():
+    if member.type in _ORDINARY_TAR_FILE_TYPES:
         if (
             member.size < 0
             or member.size > _MAX_SDIST_UNCOMPRESSED_BYTES - total_uncompressed_bytes
@@ -256,7 +280,7 @@ def _record_sdist_member(
             _fail(_INVALID_SDIST_CONTENTS_MESSAGE)
         regular_names.add(member.name)
         return total_uncompressed_bytes + member.size
-    if not member.isdir() or member.size != 0:
+    if member.type != tarfile.DIRTYPE or member.size != 0:
         _fail(_INVALID_SDIST_CONTENTS_MESSAGE)
     return total_uncompressed_bytes
 
@@ -267,7 +291,17 @@ def _verify_sdist(sdist_path: Path) -> None:
     regular_names: set[str] = set()
     total_uncompressed_bytes = 0
     try:
-        with tarfile.open(sdist_path, mode="r|gz") as sdist:
+        with (
+            sdist_path.open("rb") as compressed_stream,
+            gzip.GzipFile(fileobj=compressed_stream) as decompressed_stream,
+            tarfile.open(
+                fileobj=_BoundedReader(
+                    decompressed_stream,
+                    _MAX_SDIST_STREAM_BYTES,
+                ),
+                mode="r|",
+            ) as sdist,
+        ):
             for member_count, member in enumerate(sdist, start=1):
                 if member_count > _MAX_SDIST_MEMBERS:
                     _fail(_INVALID_SDIST_CONTENTS_MESSAGE)
