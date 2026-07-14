@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Never, cast
 
 import httpx
 
@@ -42,6 +42,16 @@ _VISIBLE_ASCII_MAX = 0x7E
 _MAX_CONTENT_LENGTH_DIGITS = 20
 
 
+def _raise_transport_failure(*, transient: bool) -> Never:
+    """Raise one metadata-only transport failure from a safe frame."""
+    raise HermesTransportError(transient=transient)
+
+
+def _raise_protocol_failure() -> Never:
+    """Raise one fresh metadata-only protocol failure from a safe frame."""
+    raise HermesProtocolError
+
+
 def _normalize_base_url(  # pyright: ignore[reportUnusedFunction]
     base_url: str,
 ) -> httpx.URL:
@@ -59,7 +69,9 @@ def _normalize_base_url(  # pyright: ignore[reportUnusedFunction]
         or not parsed.host
         or bool(parsed.userinfo)
     ):
-        raise HermesTransportError(transient=False)
+        base_url = ""
+        parsed = None
+        _raise_transport_failure(transient=False)
     return parsed
 
 
@@ -88,7 +100,8 @@ def _request_headers(  # pyright: ignore[reportUnusedFunction]
             for character in bearer_key
         )
     ):
-        raise HermesTransportError(transient=False)
+        bearer_key = ""
+        _raise_transport_failure(transient=False)
     headers = {"Authorization": f"Bearer {bearer_key}"}
     if json_body:
         headers["Content-Type"] = "application/json"
@@ -98,19 +111,32 @@ def _request_headers(  # pyright: ignore[reportUnusedFunction]
 def _serialize_request(request: Mapping[str, object]) -> bytes:
     """Serialize compact strict JSON without retaining serialization failures."""
     invalid_body = False
+    normalized_request: dict[str, object] = {}
     payload = b""
     try:
+        normalized_request = dict(request)
         payload = json.dumps(
-            dict(request),
+            normalized_request,
             ensure_ascii=False,
             allow_nan=False,
             separators=(",", ":"),
         ).encode()
-    except (TypeError, ValueError, RecursionError, UnicodeError):
+    except Exception:  # noqa: BLE001 - hostile mappings may raise any Exception
         invalid_body = True
     if invalid_body:
-        raise HermesTransportError(transient=False)
+        request = {}
+        normalized_request = {}
+        payload = b""
+        _raise_transport_failure(transient=False)
     return payload
+
+
+def _serialize_request_safely(request: Mapping[str, object]) -> bytes | None:
+    """Return serialized bytes or a sentinel after a sanitized failure."""
+    try:
+        return _serialize_request(request)
+    except HermesTransportError:
+        return None
 
 
 def _status_failure(status_code: int) -> HermesContractError:
@@ -180,25 +206,48 @@ async def _probe_capabilities(  # pyright: ignore[reportUnusedFunction]
     """Fetch and validate bounded capabilities using a caller-owned client."""
     endpoint = _operation_url(base_url, "/v1/capabilities")
     payload: bytes | None = None
-    transport_failure: HermesContractError | None = None
+    status_failure: HermesContractError | None = None
+    transport_failed = False
     try:
         async with asyncio.timeout(_CAPABILITIES_DEADLINE_SECONDS):
             payload = await _read_capabilities_body(http_client, endpoint, headers)
     except TimeoutError:
-        transport_failure = HermesTransportError(transient=True)
+        transport_failed = True
     except httpx.HTTPStatusError as error:
-        transport_failure = _status_failure(error.response.status_code)
+        status_failure = _status_failure(error.response.status_code)
     except httpx.RequestError:
-        transport_failure = HermesTransportError(transient=True)
-    if transport_failure is not None:
-        raise transport_failure
+        transport_failed = True
+    if transport_failed:
+        del http_client, base_url, headers, endpoint
+        payload = None
+        _raise_transport_failure(transient=True)
+    if status_failure is not None:
+        del http_client, base_url, headers, endpoint
+        payload = None
+        raise status_failure
     if payload is None:
-        raise HermesProtocolError
+        del http_client, base_url, headers, endpoint
+        _raise_protocol_failure()
 
     valid_json, document = _load_json(payload)
     if not valid_json:
-        raise HermesProtocolError
-    return validate_capabilities(document)
+        del http_client, base_url, headers, endpoint
+        payload = None
+        document = None
+        _raise_protocol_failure()
+
+    capabilities: HermesCapabilities | None = None
+    invalid_capabilities = False
+    try:
+        capabilities = validate_capabilities(document)
+    except HermesProtocolError:
+        invalid_capabilities = True
+    if invalid_capabilities:
+        del http_client, base_url, headers, endpoint
+        payload = None
+        document = None
+        _raise_protocol_failure()
+    return cast("HermesCapabilities", capabilities)
 
 
 async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]
@@ -211,11 +260,17 @@ async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]
     endpoint = _operation_url(base_url, "/v1/chat/completions")
     request_headers = dict(headers)
     request_headers["Content-Type"] = "application/json"
-    request_body = _serialize_request(request)
+    request_body = _serialize_request_safely(request)
+    if request_body is None:
+        del http_client, base_url, headers, request, endpoint
+        request_headers.clear()
+        _raise_transport_failure(transient=False)
 
-    protocol_failure: HermesProtocolError | None = None
+    protocol_failed = False
+    event: HermesEvent | None = None
     terminal_events: list[TerminalEvent] = []
     transport_failure: HermesContractError | None = None
+    response: httpx.Response | None = None
     try:
         async with http_client.stream(
             "POST",
@@ -232,15 +287,30 @@ async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]
                         terminal_events.append(event)
                     else:
                         yield event
-            except HermesProtocolError as error:
-                protocol_failure = error
+            except HermesProtocolError:
+                protocol_failed = True
     except httpx.HTTPStatusError as error:
         transport_failure = _status_failure(error.response.status_code)
     except httpx.RequestError:
         transport_failure = HermesTransportError(transient=True)
 
+    response = None
+    event = None
     if transport_failure is not None:
+        del http_client, base_url, headers, request, endpoint
+        request_headers.clear()
+        request_body = b""
+        terminal_events.clear()
         raise transport_failure
-    if protocol_failure is not None:
-        raise protocol_failure
-    yield terminal_events[0]
+    if protocol_failed:
+        del http_client, base_url, headers, request, endpoint
+        request_headers.clear()
+        request_body = b""
+        terminal_events.clear()
+        _raise_protocol_failure()
+    terminal_event = terminal_events[0]
+    terminal_events.clear()
+    del http_client, base_url, headers, request, endpoint
+    request_headers.clear()
+    request_body = b""
+    yield terminal_event
