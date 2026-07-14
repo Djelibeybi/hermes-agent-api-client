@@ -619,6 +619,143 @@ async def test_capability_response_close_failure_becomes_fresh_transport_error()
 
 
 @pytest.mark.asyncio
+async def test_capability_context_close_failure_becomes_fresh_transport_error() -> None:
+    """An opaque response-context close failure remains safely mapped."""
+    raw_failure = RuntimeError("capability-context-close-canary")
+    body_canary = "capability-context-body-canary"
+    body = json.dumps(
+        {**load_golden_json("capabilities/supported.json"), "private": body_canary}
+    ).encode()
+    response_stream = TrackingAsyncByteStream((body,))
+    request = httpx.Request(
+        "GET",
+        f"{_BASE_URL_CANARY}/v1/capabilities",
+        headers={"Authorization": f"Bearer {_BEARER_KEY_CANARY}"},
+    )
+    response = httpx.Response(200, request=request, stream=response_stream)
+
+    @asynccontextmanager
+    async def failing_stream(
+        *_args: object,
+        **_kwargs: object,
+    ) -> AsyncGenerator[httpx.Response]:
+        try:
+            yield response
+        finally:
+            raise raw_failure
+
+    injected_http_client = httpx.AsyncClient()
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        with patch.object(injected_http_client, "stream", new=failing_stream):
+            async with client:
+                with pytest.raises(HermesTransportError) as failure:
+                    await client.probe_capabilities()
+                assert client._active_http_client is injected_http_client  # pyright: ignore[reportPrivateUsage]
+
+        assert response_stream.closed is True
+        assert injected_http_client.is_closed is False
+        _assert_fresh_cleanup_transport_failure(
+            failure.value,
+            raw_error=raw_failure,
+            canaries=(
+                "capability-context-close-canary",
+                body_canary,
+                _BASE_URL_CANARY,
+                _BEARER_KEY_CANARY,
+            ),
+            forbidden_objects=(
+                client,
+                injected_http_client,
+                response_stream,
+                response,
+                request,
+                client._headers,  # pyright: ignore[reportPrivateUsage]
+                body,
+            ),
+        )
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_capability_transport_failure_precedes_response_close_cancellation() -> (
+    None
+):
+    """A primary capability read failure outranks close cancellation."""
+    raw_source_failure = RuntimeError("capability-primary-read-transport-canary")
+    close_cancellation = asyncio.CancelledError(
+        "capability-primary-transport-secondary-close-cancellation"
+    )
+    body_canary = "capability-primary-read-transport-body-canary"
+    header_canary = "capability-primary-read-transport-header-canary"
+    body = json.dumps(
+        {**load_golden_json("capabilities/supported.json"), "private": body_canary}
+    ).encode()
+    response_stream = TrackingAsyncByteStream(
+        (body,),
+        close_failure=close_cancellation,
+        iteration_failure=raw_source_failure,
+    )
+    responses: list[httpx.Response] = []
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        response = httpx.Response(
+            200,
+            headers={"x-private-response-header": header_canary},
+            request=request,
+            stream=response_stream,
+        )
+        responses.append(response)
+        return response
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(HermesTransportError) as failure:
+                await client.probe_capabilities()
+            assert client._active_http_client is injected_http_client  # pyright: ignore[reportPrivateUsage]
+
+        _assert_fresh_cleanup_transport_failure(
+            failure.value,
+            raw_error=raw_source_failure,
+            canaries=(
+                "capability-primary-read-transport-canary",
+                "capability-primary-transport-secondary-close-cancellation",
+                body_canary,
+                header_canary,
+                _BASE_URL_CANARY,
+                _BEARER_KEY_CANARY,
+            ),
+            forbidden_objects=(
+                close_cancellation,
+                client,
+                injected_http_client,
+                response_stream,
+                responses[0],
+                requests[0],
+                client._headers,  # pyright: ignore[reportPrivateUsage]
+                body,
+            ),
+        )
+        assert response_stream.closed is True
+        assert injected_http_client.is_closed is False
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_capability_status_failure_precedes_response_close_failure() -> None:
     """A capability status failure remains typed when response cleanup also fails."""
     raw_failure = RuntimeError("capability-status-close-canary")

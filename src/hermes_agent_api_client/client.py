@@ -213,6 +213,7 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
     cancellation: asyncio.CancelledError | None = None
     status_code: int | None = None
     protocol_failed = False
+    transport_failed = False
     primary_outcome = False
     chunk = b""
     capabilities: HermesCapabilities | None = None
@@ -233,18 +234,22 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
                 else:
                     valid_length, _ = _declared_content_length(response)
                     if valid_length:
-                        async for chunk in response.aiter_bytes():
-                            if len(chunk) > _MAX_CAPABILITIES_BYTES - len(payload):
-                                valid_length = False
-                                break
-                            payload.extend(chunk)
+                        try:
+                            async for chunk in response.aiter_bytes():
+                                if len(chunk) > _MAX_CAPABILITIES_BYTES - len(payload):
+                                    valid_length = False
+                                    break
+                                payload.extend(chunk)
+                        except Exception:  # noqa: BLE001 - map opaque read failures safely
+                            transport_failed = True
+                            primary_outcome = True
                     if not valid_length:
                         protocol_failed = True
                         primary_outcome = True
                     else:
                         capabilities = _parse_capabilities_payload(bytes(payload))
                         protocol_failed = capabilities is None
-                        primary_outcome = protocol_failed
+                        primary_outcome = primary_outcome or protocol_failed
             except asyncio.CancelledError as caught:
                 if not primary_outcome and response.is_closed:
                     capabilities = _parse_capabilities_payload(bytes(payload))
@@ -284,6 +289,14 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
         capabilities = None
         del http_client, endpoint, headers
         _raise_protocol_failure()
+    if transport_failed:
+        response = None
+        chunk = b""
+        payload.clear()
+        payload = bytearray()
+        capabilities = None
+        del http_client, endpoint, headers
+        _raise_transport_failure(transient=True)
     return cast("HermesCapabilities", capabilities)
 
 
