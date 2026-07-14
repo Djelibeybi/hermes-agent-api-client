@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    field_validator,
+)
 
 from .models import FailureCategory, HermesCapabilities
 
@@ -177,10 +184,60 @@ class _CapabilitiesWire(_WireModel):
     features: _FeaturesWire
 
 
+type _NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
+type _NonNegativeInteger = Annotated[int, Field(ge=0)]
+
+
+class _ToolProgressWire(_WireModel):
+    tool: _NonEmptyString
+    status: _NonEmptyString
+
+
+class _DeltaWire(_WireModel):
+    role: Literal["assistant"] | None = None
+    content: str | None = None
+
+
+class _ChoiceWire(_WireModel):
+    delta: _DeltaWire
+    finish_reason: Literal["stop", "length", "error"] | None
+
+
+class _UsageWire(_WireModel):
+    prompt_tokens: _NonNegativeInteger
+    completion_tokens: _NonNegativeInteger
+    total_tokens: _NonNegativeInteger
+
+
+class _ChatChunkWire(_WireModel):
+    choices: Annotated[list[_ChoiceWire], Field(min_length=1, max_length=1)]
+    usage: _UsageWire | None = None
+
+
 def _parse_capabilities(value: object) -> _CapabilitiesWire | None:
     """Parse supported wire semantics without retaining validation details."""
     try:
         return _CapabilitiesWire.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def _parse_tool_progress(  # pyright: ignore[reportUnusedFunction]
+    value: object,
+) -> _ToolProgressWire | None:
+    """Parse tool progress without retaining wire validation details."""
+    try:
+        return _ToolProgressWire.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def _parse_chat_chunk(  # pyright: ignore[reportUnusedFunction]
+    value: object,
+) -> _ChatChunkWire | None:
+    """Parse one chat chunk without retaining wire validation details."""
+    try:
+        return _ChatChunkWire.model_validate(value)
     except ValidationError:
         return None
 

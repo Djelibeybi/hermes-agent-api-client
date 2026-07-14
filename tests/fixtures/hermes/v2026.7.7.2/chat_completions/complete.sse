@@ -1,0 +1,15 @@
+data: {"id": "chatcmpl-hermes-contract", "object": "chat.completion.chunk", "created": 1784000000, "model": "hermes-contract", "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]}
+
+data: {"id": "chatcmpl-hermes-contract", "object": "chat.completion.chunk", "created": 1784000000, "model": "hermes-contract", "choices": [{"index": 0, "delta": {"content": "The lamp "}, "finish_reason": null}]}
+
+event: hermes.tool.progress
+data: {"tool": "home_assistant", "emoji": "\ud83c\udfe0", "label": "Turn on the lamp", "toolCallId": "call-contract-001", "status": "running"}
+
+: keepalive
+
+data: {"id": "chatcmpl-hermes-contract", "object": "chat.completion.chunk", "created": 1784000000, "model": "hermes-contract", "choices": [{"index": 0, "delta": {"content": "is on."}, "finish_reason": null}]}
+
+data: {"id": "chatcmpl-hermes-contract", "object": "chat.completion.chunk", "created": 1784000000, "model": "hermes-contract", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18}}
+
+data: [DONE]
+

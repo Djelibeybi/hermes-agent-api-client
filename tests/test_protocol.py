@@ -419,3 +419,24 @@ def test_transport_metadata_requires_a_real_boolean() -> None:
     """Retryability cannot be selected with a truthy non-boolean value."""
     with pytest.raises(TypeError):
         HermesTransportError(transient=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("category", "retryable"),
+    [
+        (cast("FailureCategory", "protocol"), False),
+        (FailureCategory.PROTOCOL, cast("bool", 1)),
+    ],
+)
+def test_base_failure_metadata_requires_closed_runtime_types(
+    category: FailureCategory,
+    retryable: object,
+) -> None:
+    """The public base cannot retain lookalike category or retryability values."""
+    assert isinstance(retryable, bool) or retryable == 1
+    with pytest.raises(TypeError):
+        HermesContractError(
+            category=category,
+            status_code=None,
+            retryable=cast("bool", retryable),
+        )
