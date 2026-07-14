@@ -325,13 +325,38 @@ async def async_decode_hermes_sse(  # noqa: C901, PLR0912, PLR0915 - explicit ou
 ) -> AsyncIterator[HermesEvent]:
     """Decode strict bounded SSE bytes into the closed Hermes event vocabulary."""
     decoder = _SSEDecoder()
-    source = aiter(byte_chunks)
+    source: AsyncIterator[bytes] | None = None
     raw_chunk = b""
     event: HermesEvent | None = None
     terminal: TerminalEvent | None = None
     protocol_failed = False
     transport_failed = False
     cancellation: asyncio.CancelledError | None = None
+    try:
+        source = aiter(byte_chunks)
+    except asyncio.CancelledError as caught:
+        cancellation = caught.with_traceback(None)
+    except Exception:  # noqa: BLE001 - map opaque iterator acquisition failures safely
+        transport_failed = True
+    if cancellation is not None:
+        decoder.scrub()
+        del source
+        del byte_chunks
+        del raw_chunk
+        event = None
+        terminal = None
+        del decoder
+        _reraise_cancellation(cancellation)
+    if transport_failed:
+        decoder.scrub()
+        del source
+        del byte_chunks
+        del raw_chunk
+        event = None
+        terminal = None
+        del decoder
+        _raise_transport_failure()
+    source = cast("AsyncIterator[bytes]", source)
     try:
         try:
             async for raw_chunk in source:

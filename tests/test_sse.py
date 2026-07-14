@@ -94,6 +94,18 @@ class _ClosableChunks:
             raise self._close_failure
 
 
+class _AiterFailure:
+    """Hostile async iterable that fails before yielding an iterator."""
+
+    def __init__(self, failure: BaseException, *, canary: str) -> None:
+        self._failure = failure
+        self._canary = canary
+
+    def __aiter__(self) -> AsyncIterator[bytes]:
+        """Raise the configured acquisition error without returning an iterator."""
+        raise self._failure
+
+
 async def _decode(parts: tuple[bytes, ...]) -> tuple[object, ...]:
     """Collect all typed events from one isolated decoder invocation."""
     return tuple([event async for event in async_decode_hermes_sse(_chunks(parts))])
@@ -787,6 +799,53 @@ async def test_direct_sse_failures_scrub_raw_payloads_from_traceback_frames(
         caught.value,
         canaries=(prior_canary, canary),
         forbidden_objects=(payload,),
+    )
+
+
+@pytest.mark.asyncio
+async def test_iterator_acquisition_error_becomes_scrubbed_transport_failure() -> None:
+    """An iterable's `__aiter__` error cannot escape as a raw public failure."""
+    canary = "direct-sse-aiter-raw-canary"
+    failure = RuntimeError(canary)
+    source = _AiterFailure(failure, canary=canary)
+
+    with pytest.raises(HermesTransportError) as caught:
+        tuple([event async for event in async_decode_hermes_sse(source)])
+
+    assert caught.value.retryable
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=(canary,),
+        forbidden_objects=(source, failure),
+    )
+
+
+@pytest.mark.asyncio
+async def test_iterator_acquisition_cancellation_preserves_identity_and_state() -> None:
+    """A primary `__aiter__` cancellation remains exact and source-free."""
+    canary = "direct-sse-aiter-source-canary"
+    cancellation = asyncio.CancelledError("direct-sse-aiter-cancellation")
+    source = _AiterFailure(cancellation, canary=canary)
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        tuple([event async for event in async_decode_hermes_sse(source)])
+
+    assert caught.value is cancellation
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=(canary,),
+        forbidden_objects=(source,),
+    )
+
+
+@pytest.mark.asyncio
+async def test_iterator_acquisition_accepts_normal_iterables() -> None:
+    """The guarded entry boundary retains normal iterator behavior."""
+    source = _UnclosableChunks((_successful_stream("aiter-control"),))
+
+    assert tuple([event async for event in async_decode_hermes_sse(source)]) == (
+        AssistantDeltaEvent(text="aiter-control"),
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS),
     )
 
 
