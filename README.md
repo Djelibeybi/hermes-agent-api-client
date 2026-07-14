@@ -91,12 +91,17 @@ evidence from a live Hermes server.
 
 ## Development
 
-Install the exact locked development environment, install the commit hook, and
-run the complete quality gate:
+Install the exact locked development environment and the commit hook:
 
 ```console
 uv sync --locked --all-groups
 uv run prek install --prepare-hooks
+```
+
+`prek` now runs the complete quality gate automatically before every commit. To
+run it manually across the repository:
+
+```console
 uv run prek run --all-files
 ```
 
