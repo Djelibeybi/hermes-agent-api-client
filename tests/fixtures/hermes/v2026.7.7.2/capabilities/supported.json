@@ -1,0 +1,13 @@
+{
+  "object": "hermes.api_server.capabilities",
+  "platform": "hermes-agent",
+  "auth": {
+    "type": "bearer",
+    "required": true
+  },
+  "features": {
+    "chat_completions": true,
+    "chat_completions_streaming": true,
+    "tool_progress_events": true
+  }
+}

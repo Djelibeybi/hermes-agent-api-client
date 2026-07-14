@@ -1,0 +1,88 @@
+{
+  "schema_version": 2,
+  "hermes_release": "v2026.7.7.2",
+  "source_repository": "https://github.com/NousResearch/hermes-agent",
+  "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+  "evidence_scope": {
+    "contract": "isolated-hermes-client",
+    "claims": [
+      "capabilities-response-shape",
+      "chat-completions-sse-shape"
+    ],
+    "does_not_prove": [
+      "home-assistant-lifecycle",
+      "credential-repair",
+      "home-assistant-control",
+      "live-server-compatibility"
+    ],
+    "live_server_tested": false
+  },
+  "fixtures": [
+    {
+      "path": "capabilities/supported.json",
+      "sha256": "deed6356af3c934c9c55967c20c93973a097b2885e0580feaf1a19d82d90b00c",
+      "hermes_release": "v2026.7.7.2",
+      "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+      "upstream_url": "https://github.com/NousResearch/hermes-agent/blob/v2026.7.7.2/gateway/platforms/api_server.py#L1458-L1535",
+      "capture_date": "2026-07-14",
+      "purpose": "Canonical supported capability response for the isolated client contract.",
+      "fixture_kind": "capabilities",
+      "evidence_kind": "minimized-derived",
+      "reproduction": {
+        "mode": "manual-reviewed-derivation",
+        "procedure": [
+          "Inspect the capability handler at the pinned source commit and tag.",
+          "Retain only object, platform, auth, chat-completions, streaming, and tool-progress fields exercised by the locked Phase 1 contract.",
+          "Serialize the resulting object with two-space JSON indentation and a trailing newline, then update the reviewed SHA-256."
+        ],
+        "configuration": {
+          "authentication": "bearer-required",
+          "chat_completions": true,
+          "chat_completions_streaming": true,
+          "tool_progress_events": true,
+          "live_server_invoked": false
+        }
+      },
+      "semantic_assertions": [
+        "document identifies hermes.api_server.capabilities on hermes-agent",
+        "bearer authentication is required",
+        "chat completions and streaming are enabled",
+        "unknown additive response fields remain outside the minimum fixture contract"
+      ]
+    },
+    {
+      "path": "chat_completions/complete.sse",
+      "sha256": "f633ab76231cdfd972c776a2e9f7d675746a355064f8e4544856b365ecf88281",
+      "hermes_release": "v2026.7.7.2",
+      "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+      "upstream_url": "https://github.com/NousResearch/hermes-agent/blob/v2026.7.7.2/gateway/platforms/api_server.py#L2439-L2564",
+      "capture_date": "2026-07-14",
+      "purpose": "Canonical complete chat-completions stream with role, ordered content, tool progress, keepalive, usage, stop, and DONE records.",
+      "fixture_kind": "chat-completions-sse",
+      "evidence_kind": "synthetic-derived",
+      "reproduction": {
+        "mode": "manual-reviewed-derivation",
+        "procedure": [
+          "Inspect each documented SSE emission branch at the pinned source commit and tag.",
+          "Construct one LF-delimited sequence containing role, content, tool progress, keepalive, content, usage with stop, and DONE records in source order.",
+          "Replace runtime values with the declared deterministic fixture configuration, preserve one blank line between records, and update the reviewed SHA-256."
+        ],
+        "configuration": {
+          "stream": true,
+          "id": "chatcmpl-hermes-contract",
+          "model": "hermes-contract",
+          "created": 1784000000,
+          "tool_call_id": "call-contract-001",
+          "assistant_content": "The lamp is on.",
+          "live_server_invoked": false
+        }
+      },
+      "semantic_assertions": [
+        "assistant content deltas remain ordered",
+        "tool progress and keepalive records remain non-content events",
+        "usage accompanies the stop finish record",
+        "DONE follows the finish record as Hermes framing confirmation"
+      ]
+    }
+  ]
+}
