@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import codecs
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from .models import (
     AssistantDeltaEvent,
@@ -31,6 +31,14 @@ MAX_PENDING_BYTES = 262_144
 MAX_EVENT_DATA_CHARS = 65_536
 _CR = 0x0D
 _LF = 0x0A
+
+
+@runtime_checkable
+class _SupportsAclose(Protocol):
+    """An owned asynchronous iterator that supports explicit closure."""
+
+    async def aclose(self) -> None:
+        """Release the iterator's upstream resources."""
 
 
 def _protocol_failure() -> HermesProtocolError:
@@ -125,7 +133,7 @@ class _SSEDecoder:
         self._event_name: str | None = None
         self._comment_seen = False
         self._record_touched = False
-        self._terminal_outcome: TerminalOutcome | None = None
+        self._pending_terminal: TerminalEvent | None = None
         self._done_seen = False
 
     def _events_for_data(self) -> tuple[HermesEvent, ...]:
@@ -136,7 +144,7 @@ class _SSEDecoder:
         if self._event_name not in (None, "", "message") or self._done_seen:
             raise _protocol_failure()
         self._done_seen = True
-        if self._terminal_outcome is None:
+        if self._pending_terminal is None:
             return (TerminalEvent(outcome=TerminalOutcome.SUCCESS),)
         return ()
 
@@ -147,11 +155,12 @@ class _SSEDecoder:
         """Enforce the one-terminal boundary for dispatched events."""
         accepted: list[HermesEvent] = []
         for event in events:
-            if self._terminal_outcome is not None:
+            if self._pending_terminal is not None:
                 raise _protocol_failure()
-            accepted.append(event)
             if isinstance(event, TerminalEvent):
-                self._terminal_outcome = event.outcome
+                self._pending_terminal = event
+            else:
+                accepted.append(event)
         return tuple(accepted)
 
     def _dispatch_record(self) -> tuple[HermesEvent, ...]:
@@ -234,15 +243,16 @@ class _SSEDecoder:
                 raise _protocol_failure()
             yield from self._consume_text(decoded)
 
-    def finalize(self) -> None:
-        """Require clean UTF-8, complete framing, and an explicit terminal."""
+    def finalize(self) -> TerminalEvent:
+        """Return a terminal only after all framing and boundary validation."""
         valid_utf8, _ = _decode_utf8_safely(self._utf8_decoder, b"", final=True)
         if not valid_utf8:
             raise _protocol_failure()
         if self._line_chars or self._record_touched:
             raise _protocol_failure()
-        if self._terminal_outcome is None:
+        if self._pending_terminal is None:
             raise _protocol_failure()
+        return self._pending_terminal
 
 
 async def async_decode_hermes_sse(
@@ -250,7 +260,13 @@ async def async_decode_hermes_sse(
 ) -> AsyncIterator[HermesEvent]:
     """Decode strict bounded SSE bytes into the closed Hermes event vocabulary."""
     decoder = _SSEDecoder()
-    async for chunk in byte_chunks:
-        for event in decoder.consume_chunk(chunk):
-            yield event
-    decoder.finalize()
+    source = aiter(byte_chunks)
+    try:
+        async for chunk in source:
+            for event in decoder.consume_chunk(chunk):
+                yield event
+        terminal = decoder.finalize()
+    finally:
+        if isinstance(source, _SupportsAclose):
+            await source.aclose()
+    yield terminal

@@ -26,7 +26,9 @@ from hermes_agent_api_client.sse import (
 from tests.helpers.hermes import load_golden_bytes, partition_bytes
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator
+
+_BOOLEAN_TOKEN_COUNT: object = True
 
 
 async def _chunks(parts: tuple[bytes, ...]) -> AsyncIterator[bytes]:
@@ -34,6 +36,23 @@ async def _chunks(parts: tuple[bytes, ...]) -> AsyncIterator[bytes]:
     for part in parts:
         await asyncio.sleep(0)
         yield part
+
+
+class _UnclosableChunks:
+    """A valid async byte iterator without an optional close method."""
+
+    def __init__(self, parts: tuple[bytes, ...]) -> None:
+        self._parts = iter(parts)
+
+    def __aiter__(self) -> _UnclosableChunks:
+        return self
+
+    async def __anext__(self) -> bytes:
+        await asyncio.sleep(0)
+        try:
+            return next(self._parts)
+        except StopIteration:
+            raise StopAsyncIteration from None
 
 
 async def _decode(parts: tuple[bytes, ...]) -> tuple[object, ...]:
@@ -120,6 +139,22 @@ def _derived_finish_record(
     if not include_usage:
         del document["usage"]
     return _data_record(document)
+
+
+def _derived_usage_record(field: str, value: object) -> bytes:
+    """Build a chat record with one deliberately replaced usage value."""
+    usage: dict[str, object] = {
+        "prompt_tokens": 1,
+        "completion_tokens": 2,
+        "total_tokens": 3,
+    }
+    usage[field] = value
+    return _data_record(
+        {
+            "choices": [{"delta": {"role": "assistant"}, "finish_reason": None}],
+            "usage": usage,
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -486,12 +521,17 @@ async def test_non_success_finish_reasons_are_typed_terminals(
 
 
 @pytest.mark.asyncio
-async def test_second_done_confirmation_after_terminal_is_rejected() -> None:
-    """Only one DONE framing confirmation may follow a finish record."""
+@pytest.mark.parametrize("standalone", [False, True], ids=["finish", "standalone"])
+async def test_second_done_confirmation_is_rejected_before_terminal_delivery(
+    standalone: object,
+) -> None:
+    """A duplicate DONE cannot expose a terminal before the protocol failure."""
+    assert isinstance(standalone, bool)
     finish = _derived_finish_record(finish_reason="length", include_usage=False)
     done = _canonical_records()[6]
-    with pytest.raises(HermesProtocolError):
-        await _decode((finish + done + done,))
+    prefix = done + done if standalone else finish + done + done
+
+    assert await _decode_prefix_before_failure((prefix,)) == ()
 
 
 @pytest.mark.asyncio
@@ -514,19 +554,19 @@ async def test_non_terminal_disconnects_never_report_success(
 
 @pytest.mark.asyncio
 async def test_application_data_after_terminal_is_rejected() -> None:
-    """Only redundant DONE may follow a successful finish record."""
+    """Post-terminal content fails before the terminal becomes observable."""
     finish = _derived_finish_record(finish_reason="stop", include_usage=False)
     content = _canonical_records()[1]
-    with pytest.raises(HermesProtocolError):
-        await _decode((finish + content,))
+
+    assert await _decode_prefix_before_failure((finish + content,)) == ()
 
 
 @pytest.mark.asyncio
 async def test_duplicate_finish_application_data_after_terminal_is_rejected() -> None:
-    """A second finish record is post-terminal application data, not confirmation."""
+    """Duplicate finish data fails before the terminal becomes observable."""
     finish = _derived_finish_record(finish_reason="stop", include_usage=False)
-    with pytest.raises(HermesProtocolError):
-        await _decode((finish + finish,))
+
+    assert await _decode_prefix_before_failure((finish + finish,)) == ()
 
 
 @pytest.mark.asyncio
@@ -551,6 +591,17 @@ async def test_duplicate_finish_application_data_after_terminal_is_rejected() ->
         ),
         _data_record({"tool": "home_assistant"}, event="hermes.tool.progress"),
         _data_record(
+            {"tool": "", "status": "running"},
+            event="hermes.tool.progress",
+        ),
+        _data_record(
+            {"tool": "home_assistant", "status": ""},
+            event="hermes.tool.progress",
+        ),
+        _derived_usage_record("prompt_tokens", _BOOLEAN_TOKEN_COUNT),
+        _derived_usage_record("completion_tokens", -1),
+        _derived_usage_record("total_tokens", "3"),
+        _data_record(
             {"tool": "home_assistant", "status": "running"},
             event="hermes.unknown",
         ),
@@ -564,6 +615,11 @@ async def test_duplicate_finish_application_data_after_terminal_is_rejected() ->
         "invalid-content",
         "invalid-usage",
         "invalid-progress",
+        "empty-tool",
+        "empty-status",
+        "boolean-token-count",
+        "negative-token-count",
+        "coercible-token-count",
         "unknown-event",
         "unknown-finish",
     ],
@@ -646,6 +702,40 @@ async def test_cancelled_stream_propagates_cancellation_unchanged() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         tuple([event async for event in async_decode_hermes_sse(cancelled_chunks())])
+
+
+@pytest.mark.asyncio
+async def test_decoder_close_closes_the_upstream_async_generator() -> None:
+    """Early consumer closure releases an owned upstream stream immediately."""
+    closed = False
+    content = _canonical_records()[1]
+    wait_forever = asyncio.Event()
+
+    async def source() -> AsyncIterator[bytes]:
+        nonlocal closed
+        try:
+            yield content
+            await wait_forever.wait()
+        finally:
+            closed = True
+
+    stream = cast("AsyncGenerator[object]", async_decode_hermes_sse(source()))
+    assert await anext(stream) == AssistantDeltaEvent(text="The lamp ")
+
+    await stream.aclose()
+
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_decoder_accepts_an_async_iterator_without_close_support() -> None:
+    """Optional upstream closure support is not required for valid decoding."""
+    source = _UnclosableChunks((_successful_stream("plain-iterator"),))
+
+    assert tuple([event async for event in async_decode_hermes_sse(source)]) == (
+        AssistantDeltaEvent(text="plain-iterator"),
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+    )
 
 
 @pytest.mark.asyncio
