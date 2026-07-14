@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import codecs
 import json
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Never, Protocol, cast, runtime_checkable
 
 from .models import (
     AssistantDeltaEvent,
@@ -41,9 +41,9 @@ class _SupportsAclose(Protocol):
         """Release the iterator's upstream resources."""
 
 
-def _protocol_failure() -> HermesProtocolError:
-    """Return the stable metadata-only protocol failure."""
-    return HermesProtocolError()
+def _raise_protocol_failure() -> Never:
+    """Raise a fresh protocol failure from a raw-record-free frame."""
+    raise HermesProtocolError
 
 
 def _load_json_safely(data: str) -> tuple[bool, object]:
@@ -67,25 +67,25 @@ def _decode_utf8_safely(
         return (False, "")
 
 
-def _decode_application_record(
+def _decode_application_record(  # noqa: PLR0911 - every invalid wire shape exits locally
     event_name: str | None,
     data: str,
-) -> tuple[HermesEvent, ...]:
-    """Decode one strict documented Hermes/OpenAI application record."""
+) -> tuple[HermesEvent, ...] | None:
+    """Return translated events or a sentinel without retaining rejected data."""
     valid_json, document = _load_json_safely(data)
     if not valid_json:
-        raise _protocol_failure()
+        return None
     if event_name == "hermes.tool.progress":
         progress = _parse_tool_progress(document)
         if progress is None:
-            raise _protocol_failure()
+            return None
         return (ToolProgressEvent(tool_name=progress.tool, status=progress.status),)
     if event_name not in (None, "", "message"):
-        raise _protocol_failure()
+        return None
 
     chunk = _parse_chat_chunk(document)
     if chunk is None:
-        raise _protocol_failure()
+        return None
     choice = chunk.choices[0]
     delta = choice.delta
     finish_reason = choice.finish_reason
@@ -116,7 +116,7 @@ def _decode_application_record(
         events.append(TerminalEvent(outcome=terminal_outcome))
 
     if not events and role != "assistant":
-        raise _protocol_failure()
+        return None
     return tuple(events)
 
 
@@ -135,14 +135,42 @@ class _SSEDecoder:
         self._record_touched = False
         self._pending_terminal: TerminalEvent | None = None
         self._done_seen = False
+        self._failed = False
 
-    def _events_for_data(self) -> tuple[HermesEvent, ...]:
-        """Translate joined record data into application events."""
+    @property
+    def failed(self) -> bool:
+        """Report whether a raw-input-free protocol failure is pending."""
+        return self._failed
+
+    def _clear_record(self) -> None:
+        """Discard all state derived from the current framed record."""
+        self._data_lines = []
+        self._data_chars = 0
+        self._event_name = None
+        self._comment_seen = False
+        self._record_touched = False
+
+    def scrub(self) -> None:
+        """Discard every raw-input-bearing state field before public failure."""
+        self._clear_record()
+        self._line_chars = []
+        self._raw_line_bytes = 0
+        self._text_previous_cr = False
+        self._pending_terminal = None
+        self._done_seen = False
+
+    def _fail(self) -> None:
+        """Mark an expected protocol failure after clearing decoded state."""
+        self.scrub()
+        self._failed = True
+
+    def _events_for_data(self) -> tuple[HermesEvent, ...] | None:
+        """Translate joined record data or return a sanitized failure sentinel."""
         data = "\n".join(self._data_lines)
         if data != "[DONE]":
             return _decode_application_record(self._event_name, data)
         if self._event_name not in (None, "", "message") or self._done_seen:
-            raise _protocol_failure()
+            return None
         self._done_seen = True
         if self._pending_terminal is None:
             return (TerminalEvent(outcome=TerminalOutcome.SUCCESS),)
@@ -151,12 +179,12 @@ class _SSEDecoder:
     def _accept_events(
         self,
         events: tuple[HermesEvent, ...],
-    ) -> tuple[HermesEvent, ...]:
-        """Enforce the one-terminal boundary for dispatched events."""
+    ) -> tuple[HermesEvent, ...] | None:
+        """Enforce the one-terminal boundary without retaining raw events."""
         accepted: list[HermesEvent] = []
         for event in events:
             if self._pending_terminal is not None:
-                raise _protocol_failure()
+                return None
             if isinstance(event, TerminalEvent):
                 self._pending_terminal = event
             else:
@@ -172,12 +200,16 @@ class _SSEDecoder:
         else:
             events = ()
 
-        self._data_lines = []
-        self._data_chars = 0
-        self._event_name = None
-        self._comment_seen = False
-        self._record_touched = False
-        return self._accept_events(events)
+        self._clear_record()
+        if events is None:
+            self._fail()
+            return ()
+        accepted = self._accept_events(events)
+        events = ()
+        if accepted is None:
+            self._fail()
+            return ()
+        return accepted
 
     def _consume_line(self, line: str) -> tuple[HermesEvent, ...]:
         """Apply WHATWG field parsing to one decoded line."""
@@ -198,7 +230,8 @@ class _SSEDecoder:
         if field == "data":
             next_size = self._data_chars + len(value) + bool(self._data_lines)
             if next_size > MAX_EVENT_DATA_CHARS:
-                raise _protocol_failure()
+                self._fail()
+                return ()
             self._data_lines.append(value)
             self._data_chars = next_size
         elif field == "event":
@@ -225,33 +258,41 @@ class _SSEDecoder:
     def consume_chunk(self, chunk: object) -> Iterator[HermesEvent]:
         """Consume one bounded raw transport chunk."""
         if not isinstance(chunk, bytes):
-            raise _protocol_failure()
+            self._fail()
+            return
 
         for value in chunk:
+            if self._failed:
+                return
             if value in (_CR, _LF):
                 self._raw_line_bytes = 0
             else:
                 self._raw_line_bytes += 1
                 if self._raw_line_bytes > MAX_PENDING_BYTES:
-                    raise _protocol_failure()
+                    self._fail()
+                    return
             valid_utf8, decoded = _decode_utf8_safely(
                 self._utf8_decoder,
                 bytes((value,)),
                 final=False,
             )
             if not valid_utf8:
-                raise _protocol_failure()
+                self._fail()
+                return
             yield from self._consume_text(decoded)
 
-    def finalize(self) -> TerminalEvent:
-        """Return a terminal only after all framing and boundary validation."""
+    def finalize(self) -> TerminalEvent | None:
+        """Return a terminal or a sanitized failure sentinel after validation."""
         valid_utf8, _ = _decode_utf8_safely(self._utf8_decoder, b"", final=True)
         if not valid_utf8:
-            raise _protocol_failure()
+            self._fail()
+            return None
         if self._line_chars or self._record_touched:
-            raise _protocol_failure()
+            self._fail()
+            return None
         if self._pending_terminal is None:
-            raise _protocol_failure()
+            self._fail()
+            return None
         return self._pending_terminal
 
 
@@ -261,12 +302,31 @@ async def async_decode_hermes_sse(
     """Decode strict bounded SSE bytes into the closed Hermes event vocabulary."""
     decoder = _SSEDecoder()
     source = aiter(byte_chunks)
+    raw_chunk = b""
+    event: HermesEvent | None = None
+    terminal: TerminalEvent | None = None
+    failed = False
     try:
-        async for chunk in source:
-            for event in decoder.consume_chunk(chunk):
+        async for raw_chunk in source:
+            for event in decoder.consume_chunk(raw_chunk):
                 yield event
-        terminal = decoder.finalize()
+            event = None
+            if decoder.failed:
+                failed = True
+                break
+        if not failed:
+            terminal = decoder.finalize()
+            failed = terminal is None
     finally:
         if isinstance(source, _SupportsAclose):
             await source.aclose()
-    yield terminal
+    del source
+    del byte_chunks
+    del raw_chunk
+    event = None
+    if failed:
+        decoder.scrub()
+        del decoder
+        _raise_protocol_failure()
+    del decoder
+    yield cast("TerminalEvent", terminal)

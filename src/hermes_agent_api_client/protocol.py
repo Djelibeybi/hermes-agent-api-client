@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, ClassVar, Literal, Never
 
 from pydantic import (
     BaseModel,
@@ -43,6 +43,11 @@ def _validate_transient(transient: object) -> None:
     """Require an explicit real boolean transport classification."""
     if not isinstance(transient, bool):
         raise TypeError
+
+
+def _raise_protocol_failure() -> Never:
+    """Raise a fresh protocol failure from a raw-input-free frame."""
+    raise HermesProtocolError
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -250,7 +255,8 @@ def validate_capabilities(value: object) -> HermesCapabilities:
     """Validate the minimum forward-compatible Hermes capability semantics."""
     parsed = _parse_capabilities(value)
     if parsed is None:
-        raise HermesProtocolError
+        value = None
+        _raise_protocol_failure()
     return HermesCapabilities(
         object=parsed.object,
         platform=parsed.platform,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
-from typing import Any, cast, get_args
+from typing import TYPE_CHECKING, Any, cast, get_args
 
 import pytest
 from pydantic import ValidationError
@@ -28,6 +28,9 @@ from hermes_agent_api_client.models import FailureCategory
 from hermes_agent_api_client.protocol import validate_capabilities
 from tests.helpers.hermes import add_json_key, load_golden_json, reorder_json_keys
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
 _EVENT_RECORD_COUNT = 7
 
 
@@ -49,6 +52,55 @@ def _assert_sanitized_protocol_failure(value: object) -> HermesProtocolError:
     assert error.__context__ is None
     assert vars(error) == {}
     return error
+
+
+def _package_traceback_locals(error: BaseException) -> tuple[dict[str, object], ...]:
+    """Snapshot every package-owned frame retained by one public failure."""
+    frames: list[dict[str, object]] = []
+    cursor = error.__traceback__
+    while cursor is not None:
+        module_name = cursor.tb_frame.f_globals.get("__name__")
+        if isinstance(module_name, str) and module_name.startswith(
+            "hermes_agent_api_client"
+        ):
+            frames.append(dict(cursor.tb_frame.f_locals))
+        cursor = cursor.tb_next
+    assert frames
+    return tuple(frames)
+
+
+def _assert_package_traceback_is_scrubbed(
+    error: BaseException,
+    *,
+    canaries: tuple[str, ...],
+    forbidden_objects: tuple[object, ...],
+) -> None:
+    """Reject canaries and caller-owned inputs in nested package frame locals."""
+    rendered_error = " | ".join(
+        (str(error), repr(error), repr(error.args), repr(vars(error)))
+    )
+    assert all(canary not in rendered_error for canary in canaries)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+    for frame_locals in _package_traceback_locals(error):
+        pending: list[object] = list(frame_locals.values())
+        visited: set[int] = set()
+        while pending:
+            referenced = pending.pop()
+            identity = id(referenced)
+            if identity in visited:
+                continue
+            visited.add(identity)
+            assert all(referenced is not forbidden for forbidden in forbidden_objects)
+            rendered = f"{referenced!s} | {referenced!r}"
+            assert all(canary not in rendered for canary in canaries)
+            if isinstance(referenced, dict):
+                mapping = cast("dict[object, object]", referenced)
+                pending.extend(mapping.keys())
+                pending.extend(mapping.values())
+            elif isinstance(referenced, (list, tuple, set, frozenset)):
+                pending.extend(cast("Iterable[object]", referenced))
 
 
 def test_supported_capabilities_produce_an_immutable_typed_value() -> None:
@@ -192,6 +244,20 @@ def test_invalid_capability_context_and_cause_exclude_canary_values() -> None:
     )
     assert canary not in public_state
     assert "ValidationError" not in public_state
+
+
+def test_direct_capability_failure_scrubs_raw_input_from_traceback_frames() -> None:
+    """Direct validation failures retain no rejected mapping or nested canary."""
+    canary = "direct-capability-frame-canary"
+    rejected = {"platform": canary, "nested": {"canary": canary}}
+
+    error = _assert_sanitized_protocol_failure(rejected)
+
+    _assert_package_traceback_is_scrubbed(
+        error,
+        canaries=(canary,),
+        forbidden_objects=(rejected,),
+    )
 
 
 def test_validation_is_deterministic_under_replay_and_concurrency() -> None:

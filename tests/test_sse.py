@@ -26,7 +26,7 @@ from hermes_agent_api_client.sse import (
 from tests.helpers.hermes import load_golden_bytes, partition_bytes
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Iterable
 
 _BOOLEAN_TOKEN_COUNT: object = True
 
@@ -74,6 +74,55 @@ async def _decode_prefix_before_failure(
     with pytest.raises(HermesProtocolError):
         await _consume_into(events, parts)
     return tuple(events)
+
+
+def _package_traceback_locals(error: BaseException) -> tuple[dict[str, object], ...]:
+    """Snapshot every package-owned frame retained by one decoder failure."""
+    frames: list[dict[str, object]] = []
+    cursor = error.__traceback__
+    while cursor is not None:
+        module_name = cursor.tb_frame.f_globals.get("__name__")
+        if isinstance(module_name, str) and module_name.startswith(
+            "hermes_agent_api_client"
+        ):
+            frames.append(dict(cursor.tb_frame.f_locals))
+        cursor = cursor.tb_next
+    assert frames
+    return tuple(frames)
+
+
+def _assert_package_traceback_is_scrubbed(
+    error: BaseException,
+    *,
+    canaries: tuple[str, ...],
+    forbidden_objects: tuple[object, ...],
+) -> None:
+    """Reject raw records and nested canaries from retained decoder state."""
+    rendered_error = " | ".join(
+        (str(error), repr(error), repr(error.args), repr(vars(error)))
+    )
+    assert all(canary not in rendered_error for canary in canaries)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+    for frame_locals in _package_traceback_locals(error):
+        pending: list[object] = list(frame_locals.values())
+        visited: set[int] = set()
+        while pending:
+            referenced = pending.pop()
+            identity = id(referenced)
+            if identity in visited:
+                continue
+            visited.add(identity)
+            assert all(referenced is not forbidden for forbidden in forbidden_objects)
+            rendered = f"{referenced!s} | {referenced!r}"
+            assert all(canary not in rendered for canary in canaries)
+            if isinstance(referenced, dict):
+                mapping = cast("dict[object, object]", referenced)
+                pending.extend(mapping.keys())
+                pending.extend(mapping.values())
+            elif isinstance(referenced, (list, tuple, set, frozenset)):
+                pending.extend(cast("Iterable[object]", referenced))
 
 
 def _completion_chunk(content: str, **extra: object) -> str:
@@ -665,6 +714,41 @@ async def test_wire_validation_failures_retain_no_private_input_exception() -> N
     assert error.__cause__ is None
     assert error.__context__ is None
     assert canary not in "".join(traceback.format_exception(error))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("invalid_data", "canary"),
+    [
+        ("{direct-sse-json-frame-canary}", "direct-sse-json-frame-canary"),
+        (
+            '{"choices":[{"delta":{"role":"direct-sse-wire-frame-canary"},"finish_reason":null}]}',
+            "direct-sse-wire-frame-canary",
+        ),
+    ],
+    ids=["malformed-json", "invalid-wire"],
+)
+async def test_direct_sse_failures_scrub_raw_payloads_from_traceback_frames(
+    invalid_data: str,
+    canary: str,
+) -> None:
+    """Malformed records retain neither raw bytes nor decoded record values."""
+    prior_canary = "direct-sse-prior-delta-canary"
+    payload = (
+        b"data: "
+        + _completion_chunk(prior_canary).encode()
+        + b"\n\ndata: "
+        + invalid_data.encode()
+        + b"\n\ntrailing-ignored-after-failure"
+    )
+    with pytest.raises(HermesProtocolError) as caught:
+        await _decode((payload,))
+
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=(prior_canary, canary),
+        forbidden_objects=(payload,),
+    )
 
 
 @pytest.mark.asyncio
