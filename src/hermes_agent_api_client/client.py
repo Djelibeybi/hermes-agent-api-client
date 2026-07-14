@@ -74,6 +74,10 @@ def _raise_verify_injection_conflict() -> Never:
 
 def _reraise_scrubbed_failure(failure: BaseException) -> Never:
     """Re-raise a failure after its package traceback state was scrubbed."""
+    if isinstance(failure, asyncio.CancelledError):
+        failure = failure.with_traceback(None)
+        BaseException.__setattr__(failure, "__cause__", None)
+        BaseException.__setattr__(failure, "__context__", None)
     raise failure
 
 
@@ -198,30 +202,48 @@ def _declared_content_length(response: httpx.Response) -> tuple[bool, int | None
     return (True, length)
 
 
-async def _read_capabilities_body(
+async def _read_capabilities_body(  # noqa: C901
     http_client: httpx.AsyncClient,
     endpoint: httpx.URL,
     headers: Mapping[str, str],
 ) -> bytes | None:
     """Read one capability response incrementally within the byte budget."""
     payload = bytearray()
-    async with http_client.stream(
-        "GET",
-        endpoint,
-        headers=headers,
-        timeout=_CAPABILITY_REQUEST_TIMEOUT,
-        follow_redirects=False,
-    ) as response:
-        response.raise_for_status()
-        valid_length, _ = _declared_content_length(response)
-        if valid_length:
-            async for chunk in response.aiter_bytes():
-                if len(chunk) > _MAX_CAPABILITIES_BYTES - len(payload):
-                    valid_length = False
-                    break
-                payload.extend(chunk)
-        if not valid_length:
-            return None
+    response: httpx.Response | None = None
+    cancellation: asyncio.CancelledError | None = None
+    try:
+        async with http_client.stream(
+            "GET",
+            endpoint,
+            headers=headers,
+            timeout=_CAPABILITY_REQUEST_TIMEOUT,
+            follow_redirects=False,
+        ) as response:
+            try:
+                response.raise_for_status()
+                valid_length, _ = _declared_content_length(response)
+                if valid_length:
+                    async for chunk in response.aiter_bytes():
+                        if len(chunk) > _MAX_CAPABILITIES_BYTES - len(payload):
+                            valid_length = False
+                            break
+                        payload.extend(chunk)
+                if not valid_length:
+                    return None
+            except asyncio.CancelledError as caught:
+                cancellation = caught.with_traceback(None)
+    except asyncio.CancelledError:
+        if cancellation is None:
+            raise
+    except Exception:
+        if cancellation is None:
+            raise
+    if cancellation is not None:
+        response = None
+        payload.clear()
+        payload = bytearray()
+        del http_client, endpoint, headers
+        _reraise_scrubbed_failure(cancellation)
     return bytes(payload)
 
 
@@ -233,7 +255,7 @@ def _load_json(payload: bytes) -> tuple[bool, object]:
         return (False, None)
 
 
-async def _probe_capabilities(  # pyright: ignore[reportUnusedFunction]
+async def _probe_capabilities(  # pyright: ignore[reportUnusedFunction]  # noqa: C901
     http_client: httpx.AsyncClient,
     base_url: httpx.URL,
     headers: Mapping[str, str],
@@ -251,6 +273,8 @@ async def _probe_capabilities(  # pyright: ignore[reportUnusedFunction]
     except httpx.HTTPStatusError as error:
         status_failure = _status_failure(error.response.status_code)
     except httpx.RequestError:
+        transport_failed = True
+    except Exception:  # noqa: BLE001 - translate opaque cleanup failures safely
         transport_failed = True
     if transport_failed:
         del http_client, base_url, headers, endpoint
@@ -285,7 +309,7 @@ async def _probe_capabilities(  # pyright: ignore[reportUnusedFunction]
     return cast("HermesCapabilities", capabilities)
 
 
-async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]
+async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]  # noqa: C901, PLR0912, PLR0915
     http_client: httpx.AsyncClient,
     base_url: httpx.URL,
     headers: Mapping[str, str],
@@ -306,6 +330,7 @@ async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]
     terminal_events: list[TerminalEvent] = []
     transport_failure: HermesContractError | None = None
     response: httpx.Response | None = None
+    cancellation: asyncio.CancelledError | None = None
     try:
         async with http_client.stream(
             "POST",
@@ -315,34 +340,57 @@ async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]
             timeout=_CHAT_STREAM_TIMEOUT,
             follow_redirects=False,
         ) as response:
-            response.raise_for_status()
             try:
-                async for event in async_decode_hermes_sse(response.aiter_bytes()):
-                    if isinstance(event, TerminalEvent):
-                        terminal_events.append(event)
-                    else:
-                        yield event
-            except HermesProtocolError:
-                protocol_failed = True
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as error:
+                    transport_failure = _status_failure(error.response.status_code)
+                else:
+                    try:
+                        async for event in async_decode_hermes_sse(
+                            response.aiter_bytes()
+                        ):
+                            if isinstance(event, TerminalEvent):
+                                terminal_events.append(event)
+                            else:
+                                yield event
+                    except HermesProtocolError:
+                        protocol_failed = True
+            except asyncio.CancelledError as caught:
+                cancellation = caught.with_traceback(None)
+    except asyncio.CancelledError:
+        if cancellation is None:
+            raise
     except httpx.HTTPStatusError as error:
-        transport_failure = _status_failure(error.response.status_code)
+        if cancellation is None:
+            transport_failure = _status_failure(error.response.status_code)
     except httpx.RequestError:
-        transport_failure = HermesTransportError(transient=True)
+        if cancellation is None:
+            transport_failure = HermesTransportError(transient=True)
+    except Exception:  # noqa: BLE001 - translate opaque cleanup failures safely
+        if cancellation is None and transport_failure is None and not protocol_failed:
+            transport_failure = HermesTransportError(transient=True)
 
     response = None
     event = None
-    if transport_failure is not None:
+    if cancellation is not None:
         del http_client, base_url, headers, request, endpoint
         request_headers.clear()
         request_body = b""
         terminal_events.clear()
-        raise transport_failure
+        _reraise_scrubbed_failure(cancellation)
     if protocol_failed:
         del http_client, base_url, headers, request, endpoint
         request_headers.clear()
         request_body = b""
         terminal_events.clear()
         _raise_protocol_failure()
+    if transport_failure is not None:
+        del http_client, base_url, headers, request, endpoint
+        request_headers.clear()
+        request_body = b""
+        terminal_events.clear()
+        raise transport_failure
     terminal_event = terminal_events[0]
     terminal_events.clear()
     del http_client, base_url, headers, request, endpoint
@@ -430,9 +478,22 @@ class HermesAgentApiClient:
         self._active_http_client = None
         self._exited = True
         owns_active = active is not None and self._injected_http_client is None
+        body_failed = exc_value is not None
+        cleanup_failed = False
+        cleanup_cancellation: asyncio.CancelledError | None = None
         del self, exc_type, exc_value, traceback
         if owns_active:
-            await cast("httpx.AsyncClient", active).aclose()
+            try:
+                await cast("httpx.AsyncClient", active).aclose()
+            except asyncio.CancelledError as cancellation:
+                cleanup_cancellation = cancellation.with_traceback(None)
+            except Exception:  # noqa: BLE001 - translate opaque cleanup failures safely
+                cleanup_failed = True
+        active = None
+        if cleanup_cancellation is not None:
+            _reraise_scrubbed_failure(cleanup_cancellation)
+        if cleanup_failed and not body_failed:
+            _raise_transport_failure(transient=True)
 
     def _require_active_client(self) -> httpx.AsyncClient:
         """Return the active HTTP client or reject out-of-lifecycle use."""
