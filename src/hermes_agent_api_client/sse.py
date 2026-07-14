@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import codecs
 import json
 from typing import TYPE_CHECKING, Never, Protocol, cast, runtime_checkable
@@ -17,6 +18,7 @@ from .models import (
 )
 from .protocol import (
     HermesProtocolError,
+    HermesTransportError,
     _parse_chat_chunk,  # pyright: ignore[reportPrivateUsage]
     _parse_tool_progress,  # pyright: ignore[reportPrivateUsage]
 )
@@ -44,6 +46,28 @@ class _SupportsAclose(Protocol):
 def _raise_protocol_failure() -> Never:
     """Raise a fresh protocol failure from a raw-record-free frame."""
     raise HermesProtocolError
+
+
+def _raise_transport_failure() -> Never:
+    """Raise a fresh retryable transport failure from a safe frame."""
+    failure = HermesTransportError(transient=True)
+    try:
+        raise failure
+    except HermesTransportError as caught:
+        BaseException.__setattr__(caught, "__cause__", None)
+        BaseException.__setattr__(caught, "__context__", None)
+        raise
+
+
+def _reraise_cancellation(cancellation: asyncio.CancelledError) -> Never:
+    """Re-raise one cancellation after removing retained package traceback state."""
+    cancellation = cancellation.with_traceback(None)
+    try:
+        raise cancellation
+    except asyncio.CancelledError as caught:
+        BaseException.__setattr__(caught, "__cause__", None)
+        BaseException.__setattr__(caught, "__context__", None)
+        raise
 
 
 def _load_json_safely(data: str) -> tuple[bool, object]:
@@ -296,7 +320,7 @@ class _SSEDecoder:
         return self._pending_terminal
 
 
-async def async_decode_hermes_sse(
+async def async_decode_hermes_sse(  # noqa: C901, PLR0912, PLR0915 - explicit outcome precedence
     byte_chunks: AsyncIterable[bytes],
 ) -> AsyncIterator[HermesEvent]:
     """Decode strict bounded SSE bytes into the closed Hermes event vocabulary."""
@@ -305,28 +329,73 @@ async def async_decode_hermes_sse(
     raw_chunk = b""
     event: HermesEvent | None = None
     terminal: TerminalEvent | None = None
-    failed = False
+    protocol_failed = False
+    transport_failed = False
+    cancellation: asyncio.CancelledError | None = None
     try:
-        async for raw_chunk in source:
-            for event in decoder.consume_chunk(raw_chunk):
-                yield event
-            event = None
-            if decoder.failed:
-                failed = True
-                break
-        if not failed:
-            terminal = decoder.finalize()
-            failed = terminal is None
+        try:
+            async for raw_chunk in source:
+                for event in decoder.consume_chunk(raw_chunk):
+                    yield event
+                event = None
+                if decoder.failed:
+                    protocol_failed = True
+                    break
+            if not protocol_failed:
+                terminal = decoder.finalize()
+                protocol_failed = terminal is None
+        except asyncio.CancelledError as caught:
+            cancellation = caught.with_traceback(None)
+        except Exception:  # noqa: BLE001 - map opaque source failures safely
+            transport_failed = True
     finally:
-        if isinstance(source, _SupportsAclose):
-            await source.aclose()
+        cleanup_failed = False
+        cleanup_cancellation: asyncio.CancelledError | None = None
+        try:
+            if isinstance(source, _SupportsAclose):
+                await source.aclose()
+        except asyncio.CancelledError as caught:
+            if cancellation is None and not protocol_failed and not transport_failed:
+                cleanup_cancellation = caught.with_traceback(None)
+        except Exception:  # noqa: BLE001 - map opaque cleanup failures safely
+            if cancellation is None and not protocol_failed and not transport_failed:
+                cleanup_failed = True
+        if cleanup_cancellation is not None:
+            decoder.scrub()
+            del source
+            del byte_chunks
+            del raw_chunk
+            event = None
+            terminal = None
+            del decoder
+            _reraise_cancellation(cleanup_cancellation)
+        if cleanup_failed:
+            decoder.scrub()
+            del source
+            del byte_chunks
+            del raw_chunk
+            event = None
+            terminal = None
+            del decoder
+            _raise_transport_failure()
     del source
     del byte_chunks
     del raw_chunk
     event = None
-    if failed:
+    if cancellation is not None:
         decoder.scrub()
+        terminal = None
+        del decoder
+        _reraise_cancellation(cancellation)
+    if protocol_failed:
+        decoder.scrub()
+        terminal = None
         del decoder
         _raise_protocol_failure()
+    if transport_failed:
+        decoder.scrub()
+        terminal = None
+        del decoder
+        _raise_transport_failure()
     del decoder
     yield cast("TerminalEvent", terminal)

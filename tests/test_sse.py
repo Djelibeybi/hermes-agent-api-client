@@ -12,6 +12,7 @@ import pytest
 from hermes_agent_api_client import (
     AssistantDeltaEvent,
     HermesProtocolError,
+    HermesTransportError,
     KeepaliveEvent,
     TerminalEvent,
     TerminalOutcome,
@@ -53,6 +54,44 @@ class _UnclosableChunks:
             return next(self._parts)
         except StopIteration:
             raise StopAsyncIteration from None
+
+
+class _ClosableChunks:
+    """Deterministic async bytes with independently controlled read and close errors."""
+
+    def __init__(
+        self,
+        parts: tuple[bytes, ...],
+        *,
+        read_failure: BaseException | None = None,
+        close_failure: BaseException | None = None,
+    ) -> None:
+        self._parts = iter(parts)
+        self._read_failure = read_failure
+        self._close_failure = close_failure
+        self.closed = False
+
+    def __aiter__(self) -> _ClosableChunks:
+        return self
+
+    async def __anext__(self) -> bytes:
+        """Return chunks before raising the configured source-read failure."""
+        await asyncio.sleep(0)
+        try:
+            return next(self._parts)
+        except StopIteration:
+            pass
+        if self._read_failure is not None:
+            failure = self._read_failure
+            self._read_failure = None
+            raise failure
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        """Record close ownership before raising the configured cleanup failure."""
+        self.closed = True
+        if self._close_failure is not None:
+            raise self._close_failure
 
 
 async def _decode(parts: tuple[bytes, ...]) -> tuple[object, ...]:
@@ -749,6 +788,121 @@ async def test_direct_sse_failures_scrub_raw_payloads_from_traceback_frames(
         canaries=(prior_canary, canary),
         forbidden_objects=(payload,),
     )
+
+
+@pytest.mark.asyncio
+async def test_protocol_failure_wins_over_close_error_and_scrubs_cleanup_state() -> (
+    None
+):
+    """A malformed record cannot be replaced by an opaque close failure."""
+    payload_canary = "primary-sse-payload-close-canary"
+    close_canary = "secondary-sse-close-canary"
+    payload = f"data: {{{payload_canary}}}\n\n".encode()
+    close_failure = RuntimeError(close_canary)
+    source = _ClosableChunks((payload,), close_failure=close_failure)
+
+    with pytest.raises(HermesProtocolError) as caught:
+        tuple([event async for event in async_decode_hermes_sse(source)])
+
+    assert source.closed
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=(payload_canary, close_canary),
+        forbidden_objects=(source, payload, close_failure),
+    )
+
+
+@pytest.mark.asyncio
+async def test_primary_source_cancellation_wins_over_close_cancellation() -> None:
+    """The original cancellation identity survives secondary source cleanup."""
+    primary = asyncio.CancelledError("primary-sse-read-cancellation")
+    secondary = asyncio.CancelledError("secondary-sse-close-cancellation")
+    source = _ClosableChunks((), read_failure=primary, close_failure=secondary)
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        tuple([event async for event in async_decode_hermes_sse(source)])
+
+    assert caught.value is primary
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert source.closed
+
+
+@pytest.mark.asyncio
+async def test_cleanup_only_close_error_becomes_safe_transport_failure() -> None:
+    """A close failure after a valid terminal never exposes the raw exception."""
+    close_canary = "cleanup-only-sse-close-canary"
+    payload = b"data: [DONE]\n\n"
+    close_failure = RuntimeError(close_canary)
+    source = _ClosableChunks((payload,), close_failure=close_failure)
+
+    with pytest.raises(HermesTransportError) as caught:
+        tuple([event async for event in async_decode_hermes_sse(source)])
+
+    assert source.closed
+    assert caught.value.retryable
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=(close_canary,),
+        forbidden_objects=(source, payload, close_failure),
+    )
+
+
+@pytest.mark.asyncio
+async def test_cleanup_only_close_cancellation_propagates_unchanged() -> None:
+    """A cancellation from otherwise-successful cleanup remains observable."""
+    cleanup = asyncio.CancelledError("cleanup-only-sse-cancellation")
+    source = _ClosableChunks((b"data: [DONE]\n\n",), close_failure=cleanup)
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        tuple([event async for event in async_decode_hermes_sse(source)])
+
+    assert caught.value is cleanup
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert source.closed
+
+
+@pytest.mark.asyncio
+async def test_early_close_error_becomes_safe_transport_failure() -> None:
+    """Consumer-triggered shutdown maps an opaque cleanup failure safely."""
+    close_canary = "early-close-sse-cleanup-canary"
+    payload = b"data: " + _completion_chunk("early-close-content").encode() + b"\n\n"
+    close_failure = RuntimeError(close_canary)
+    source = _ClosableChunks((payload,), close_failure=close_failure)
+    stream = cast("AsyncGenerator[object]", async_decode_hermes_sse(source))
+
+    assert await anext(stream) == AssistantDeltaEvent(text="early-close-content")
+    with pytest.raises(HermesTransportError) as caught:
+        await stream.aclose()
+
+    assert source.closed
+    assert caught.value.retryable
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=(close_canary,),
+        forbidden_objects=(source, payload, close_failure),
+    )
+
+
+@pytest.mark.asyncio
+async def test_early_close_cancellation_propagates_unchanged() -> None:
+    """Consumer shutdown preserves a cleanup-only cancellation identity."""
+    cleanup = asyncio.CancelledError("early-close-sse-cleanup-cancellation")
+    source = _ClosableChunks(
+        (b"data: " + _completion_chunk("early-close-content").encode() + b"\n\n",),
+        close_failure=cleanup,
+    )
+    stream = cast("AsyncGenerator[object]", async_decode_hermes_sse(source))
+
+    assert await anext(stream) == AssistantDeltaEvent(text="early-close-content")
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await stream.aclose()
+
+    assert caught.value is cleanup
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert source.closed
 
 
 @pytest.mark.asyncio
