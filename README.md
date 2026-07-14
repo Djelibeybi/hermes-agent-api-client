@@ -6,11 +6,12 @@ Server. Version 0.1.0 requires Python 3.13 or later.
 
 ## Installation
 
-The package has not yet been published to PyPI. Install the implemented client
-from the public Git repository at an immutable commit:
+The package has not yet been published to PyPI. To install a source revision
+from the public GitHub repository, replace `<full-commit-sha>` with the full
+40-character SHA of a commit that has been pushed to GitHub:
 
 ```console
-python -m pip install "hermes-agent-api-client @ git+https://github.com/Djelibeybi/hermes-agent-api-client.git@c961c8e8930386ad001351f980da66e3c12790b5"
+python -m pip install "hermes-agent-api-client @ git+https://github.com/Djelibeybi/hermes-agent-api-client.git@<full-commit-sha>"
 ```
 
 ## Usage
