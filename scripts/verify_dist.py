@@ -10,7 +10,7 @@ from email.parser import BytesParser
 from email.policy import default
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Never
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Sequence
@@ -59,9 +59,20 @@ _EXPECTED_DEPENDENCIES = {
     "httpx>=0.28.1,<1",
     "pydantic>=2.13.4,<3",
 }
+_EXPECTED_SINGLETON_METADATA = {
+    "Name": "hermes-agent-api-client",
+    "Version": "0.1.0",
+    "Requires-Python": ">=3.13",
+    "License-Expression": "UPL-1.0",
+}
+_FORBIDDEN_RELEASE_COMPONENTS = frozenset(
+    {"tests", "fixtures", ".venv", "build", "dist"}
+)
 _ARCHIVE_ARGUMENT_COUNT = 2
 _MAX_WHEEL_UNCOMPRESSED_BYTES = 10_000_000
 _MAX_METADATA_BYTES = 1_000_000
+_MAX_SDIST_MEMBERS = 512
+_MAX_SDIST_UNCOMPRESSED_BYTES = 10_000_000
 _ISOLATED_IMPORT_SCRIPT = """
 import importlib
 import sys
@@ -82,7 +93,7 @@ class VerificationError(Exception):
     """A distribution failed a verifier contract with a constant message."""
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> Never:
     """Raise a verifier failure without retaining an upstream exception."""
     raise VerificationError(message)
 
@@ -118,30 +129,36 @@ def _has_suffix(names: Collection[str], suffix: str) -> bool:
     return any(name == suffix or name.endswith(f"/{suffix}") for name in names)
 
 
+def _contains_forbidden_release_path(names: Collection[str]) -> bool:
+    """Return whether names include development-only path components."""
+    return any(
+        part in _FORBIDDEN_RELEASE_COMPONENTS or part.startswith(".coverage")
+        for name in names
+        for part in PurePosixPath(name).parts
+    )
+
+
 def _wheel_names_are_valid(names: Collection[str]) -> bool:
     """Validate wheel package, license, and exclusion members."""
     return (
         _names_are_safe(names)
         and set(names) >= _REQUIRED_PACKAGE_SUFFIXES
-        and not any("tests/" in name for name in names)
-        and not any("fixtures/" in name for name in names)
+        and not _contains_forbidden_release_path(names)
         and any(name.endswith("LICENSE") for name in names)
     )
 
 
-def _sdist_names_are_valid(names: Collection[str]) -> bool:
+def _sdist_names_are_valid(
+    names: Collection[str],
+    regular_names: Collection[str],
+) -> bool:
     """Validate source archive release members and exclusions."""
-    member_parts = tuple(PurePosixPath(name).parts for name in names)
     return (
         _names_are_safe(names)
-        and all(_has_suffix(names, suffix) for suffix in _REQUIRED_SDIST_SUFFIXES)
-        and not any("tests/" in name for name in names)
-        and not any("fixtures/" in name for name in names)
-        and not any(
-            part.startswith(".coverage") for parts in member_parts for part in parts
+        and all(
+            _has_suffix(regular_names, suffix) for suffix in _REQUIRED_SDIST_SUFFIXES
         )
-        and not any(".venv" in parts for parts in member_parts)
-        and not any("dist" in parts for parts in member_parts)
+        and not _contains_forbidden_release_path(names)
     )
 
 
@@ -149,10 +166,12 @@ def _metadata_is_valid(package_metadata: Message) -> bool:
     """Validate the exact public wheel metadata contract."""
     dependencies = package_metadata.get_all("Requires-Dist", [])
     return (
-        package_metadata["Name"] == "hermes-agent-api-client"
-        and package_metadata["Version"] == "0.1.0"
-        and package_metadata["Requires-Python"] == ">=3.13"
-        and package_metadata["License-Expression"] == "UPL-1.0"
+        not package_metadata.defects
+        and all(
+            len(values := package_metadata.get_all(field, [])) == 1
+            and values[0] == expected
+            for field, expected in _EXPECTED_SINGLETON_METADATA.items()
+        )
         and set(dependencies) == _EXPECTED_DEPENDENCIES
         and len(dependencies) == len(_EXPECTED_DEPENDENCIES)
     )
@@ -219,14 +238,50 @@ def _verify_wheel(wheel_path: Path) -> None:
         _fail(_INVALID_WHEEL_ARCHIVE_MESSAGE)
 
 
+def _record_sdist_member(
+    member: tarfile.TarInfo,
+    names: set[str],
+    regular_names: set[str],
+    total_uncompressed_bytes: int,
+) -> int:
+    """Validate and record one bounded source archive member."""
+    if member.name in names or not _names_are_safe((member.name,)):
+        _fail(_INVALID_SDIST_CONTENTS_MESSAGE)
+    names.add(member.name)
+    if member.isfile():
+        if (
+            member.size < 0
+            or member.size > _MAX_SDIST_UNCOMPRESSED_BYTES - total_uncompressed_bytes
+        ):
+            _fail(_INVALID_SDIST_CONTENTS_MESSAGE)
+        regular_names.add(member.name)
+        return total_uncompressed_bytes + member.size
+    if not member.isdir() or member.size != 0:
+        _fail(_INVALID_SDIST_CONTENTS_MESSAGE)
+    return total_uncompressed_bytes
+
+
 def _verify_sdist(sdist_path: Path) -> None:
-    """Validate source distribution members without extracting contents."""
+    """Validate bounded source members without extracting their contents."""
+    names: set[str] = set()
+    regular_names: set[str] = set()
+    total_uncompressed_bytes = 0
     try:
-        with tarfile.open(sdist_path, mode="r:gz") as sdist:
-            names = set(sdist.getnames())
+        with tarfile.open(sdist_path, mode="r|gz") as sdist:
+            for member_count, member in enumerate(sdist, start=1):
+                if member_count > _MAX_SDIST_MEMBERS:
+                    _fail(_INVALID_SDIST_CONTENTS_MESSAGE)
+                total_uncompressed_bytes = _record_sdist_member(
+                    member,
+                    names,
+                    regular_names,
+                    total_uncompressed_bytes,
+                )
+    except VerificationError:
+        raise
     except (OSError, tarfile.TarError):
         _fail(_INVALID_SDIST_ARCHIVE_MESSAGE)
-    if not _sdist_names_are_valid(names):
+    if not _sdist_names_are_valid(names, regular_names):
         _fail(_INVALID_SDIST_CONTENTS_MESSAGE)
 
 
