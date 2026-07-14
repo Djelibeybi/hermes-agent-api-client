@@ -1,0 +1,75 @@
+[build-system]
+requires = ["uv_build>=0.11.28,<0.12"]
+build-backend = "uv_build"
+
+[project]
+name = "hermes-agent-api-client"
+version = "0.1.0"
+description = "Typed async client for the Hermes Agent API Server"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "UPL-1.0"
+license-files = ["LICENSE"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: AsyncIO",
+  "License :: OSI Approved :: Universal Permissive License (UPL)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Typing :: Typed",
+]
+dependencies = [
+  "httpx>=0.28.1,<1",
+  "pydantic>=2.13.4,<3",
+]
+
+[project.urls]
+Repository = "https://github.com/Djelibeybi/hermes-agent-api-client"
+Issues = "https://github.com/Djelibeybi/hermes-agent-api-client/issues"
+
+[dependency-groups]
+dev = [
+  "coverage[toml]==7.15.1",
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "respx==0.23.1",
+  "ruff==0.15.21",
+]
+
+[tool.uv]
+required-version = "==0.11.28"
+default-groups = ["dev"]
+
+[tool.uv.build-backend]
+source-include = ["uv.lock"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["hermes_agent_api_client"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["COM812", "ISC001"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "SLF001"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
