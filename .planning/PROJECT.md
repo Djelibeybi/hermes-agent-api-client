@@ -1,5 +1,10 @@
 # Hermes Agent API Client
 
+## What This Is
+
+Hermes Agent API Client is the reusable Python package for the typed Hermes
+Agent API boundary described by this project.
+
 ## Core Value
 
 Python consumers can use a typed, bounded, secret-safe asynchronous client for the documented Hermes Agent API Server boundary without implementing protocol or transport behavior themselves.
@@ -19,3 +24,8 @@ Python consumers can use a typed, bounded, secret-safe asynchronous client for t
 - Home Assistant lifecycle, profiles, entities, sessions, memory policy, and Assist behavior belong to `hermes-conversation`.
 - v0.1.0 supports capability discovery and streaming Chat Completions only.
 - Future API operations require a new evidence-backed milestone.
+
+## Requirements
+
+The completed v0.1.0 baseline requirements and their status are recorded in
+`REQUIREMENTS.md`.
