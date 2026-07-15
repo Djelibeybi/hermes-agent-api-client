@@ -31,5 +31,5 @@ HTTP clients.
 ## Boundary
 
 This package phase excludes Home Assistant lifecycle, profiles, entities,
-sessions, memory policy, Assist behavior, and integration configuration. Those
-behaviors belong to `hermes-conversation`, not this reusable client milestone.
+sessions, memory policy, Assist behaviour, and integration configuration. Those
+behaviours belong to `hermes-conversation`, not this reusable client milestone.

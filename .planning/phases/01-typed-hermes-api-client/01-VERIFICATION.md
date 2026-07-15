@@ -71,3 +71,20 @@ with coverage, distribution build, and distribution verification all passed.
 
 The import changes planning records only; package source, tests,
 `pyproject.toml`, `uv.lock`, tags, and published artifacts remain unchanged.
+
+## Planning Review Corrections
+
+The pull-request review of this historical import tightened its executable
+planning checks without changing package or release evidence:
+
+- Protected-file guards compare both the index and worktree with `HEAD`.
+- Every requirement ID must appear in each required traceability artifact.
+- The implementation plan explicitly creates the shipped historical
+  `01-PLAN.md` artifact.
+- PyPI version validation uses an explicit failure path that remains active
+  under Python optimisation.
+- Planning-only provenance uses the merge-base with `main` instead of assuming
+  a fixed number of import commits.
+
+The corrected guard, traceability, provenance, and locked quality commands all
+passed on 2026-07-15. New planning prose uses Australian English spelling.

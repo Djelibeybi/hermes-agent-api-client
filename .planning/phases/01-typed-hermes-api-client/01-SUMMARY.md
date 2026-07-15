@@ -19,7 +19,7 @@ requirements-completed:
 ## Historical Result
 
 The repository had already delivered a typed, bounded, secret-safe async Hermes
-client before this GSD project was initialized. This summary imports that
+client before this GSD project was initialised. This summary imports that
 completed result; it does not claim that GSD planned, executed, or verified the
 historical implementation when it was created.
 
@@ -35,7 +35,7 @@ The published baseline satisfies:
   `v0.1.0:src/hermes_agent_api_client/protocol.py`, and
   `v0.1.0:src/hermes_agent_api_client/sse.py`.
 - **HTTP-01, SECU-01:** lifecycle, cancellation, cleanup, ownership, and safe
-  failure behavior are implemented in the same client and protocol modules and
+  failure behaviour are implemented in the same client and protocol modules and
   exercised by `v0.1.0:tests/test_client_lifecycle.py`,
   `v0.1.0:tests/test_transport.py`, `v0.1.0:tests/test_protocol.py`, and
   `v0.1.0:tests/test_sse.py`.
