@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import traceback
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast, get_args
 
 import pytest
@@ -42,10 +44,47 @@ from tests.helpers.hermes import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
 _EVENT_RECORD_COUNT = 7
 _MODEL_MAX_LENGTH = 255
+_HOSTILE_ACCESS_CANARY = "hostile-mapping-access-canary"
+_HOSTILE_ITERATION_CANARY = "hostile-mapping-iteration-canary"
+
+
+class _HostileMapping(Mapping[str, object]):
+    """A mapping whose key access raises a private upstream detail."""
+
+    def __init__(self, values: dict[str, object], fail_key: str) -> None:
+        self._values = values
+        self._fail_key = fail_key
+
+    def __getitem__(self, key: str) -> object:
+        if key == self._fail_key:
+            raise RuntimeError(_HOSTILE_ACCESS_CANARY)
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+
+class _HostileIterationMapping(Mapping[str, object]):
+    """A readable mapping whose normalization exposes a private failure."""
+
+    def __init__(self, values: dict[str, object]) -> None:
+        self._values = values
+
+    def __getitem__(self, key: str) -> object:
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        raise RuntimeError(_HOSTILE_ITERATION_CANARY)
+
+    def __len__(self) -> int:
+        return len(self._values)
 
 
 def _supported_capabilities() -> dict[str, Any]:
@@ -391,6 +430,144 @@ def test_missing_identity_precedes_missing_chat_completions() -> None:
     value = remove_json_key(value, ("features", "chat_completions"))
     with pytest.raises(HermesIdentityError):
         validate_capabilities(value)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        ("object", None),
+        ("object", "not.hermes"),
+        ("platform", None),
+        ("platform", "not-hermes-agent"),
+    ],
+)
+def test_non_dict_mapping_identity_failures_are_exact(
+    path: str,
+    replacement: object,
+) -> None:
+    """Mapping semantics retain exact missing and invalid identity failures."""
+    value = _supported_capabilities()
+    if replacement is None:
+        del value[path]
+    else:
+        value[path] = replacement
+
+    with pytest.raises(HermesIdentityError) as caught:
+        validate_capabilities(MappingProxyType(value))
+    assert type(caught.value) is HermesIdentityError
+
+
+@pytest.mark.parametrize(
+    "features",
+    [
+        cast("Mapping[str, object]", MappingProxyType({})),
+        cast(
+            "Mapping[str, object]",
+            MappingProxyType({"chat_completions": False}),
+        ),
+        cast(
+            "Mapping[str, object]",
+            MappingProxyType({"chat_completions": 1}),
+        ),
+    ],
+)
+def test_non_dict_mapping_chat_failures_are_exact(
+    features: Mapping[str, object],
+) -> None:
+    """Mapping-valued missing or invalid required chat support is classified."""
+    value = _supported_capabilities()
+    value["features"] = features
+
+    with pytest.raises(HermesCapabilityError) as caught:
+        validate_capabilities(MappingProxyType(value))
+    assert type(caught.value) is HermesCapabilityError
+
+
+def test_complete_non_dict_mappings_produce_immutable_capabilities() -> None:
+    """Complete mapping inputs validate into the public immutable value."""
+    value = _supported_capabilities()
+    value["features"] = MappingProxyType(cast("dict[str, object]", value["features"]))
+
+    result = validate_capabilities(MappingProxyType(value))
+
+    assert result == validate_capabilities(_supported_capabilities())
+    with pytest.raises(ValidationError, match="Instance is frozen"):
+        result.platform = "changed"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("fail_key", ["object", "platform", "features"])
+def test_hostile_mapping_access_becomes_a_scrubbed_generic_protocol_error(
+    fail_key: str,
+) -> None:
+    """Mapping access exceptions and their inputs cannot escape validation."""
+    rejected = _HostileMapping(_supported_capabilities(), fail_key)
+
+    error = _assert_sanitized_protocol_failure(rejected)
+
+    assert type(error) is HermesProtocolError
+    assert _HOSTILE_ACCESS_CANARY not in "".join(traceback.format_exception(error))
+    _assert_package_traceback_is_scrubbed(
+        error,
+        canaries=(_HOSTILE_ACCESS_CANARY,),
+        forbidden_objects=(rejected,),
+    )
+
+
+def test_hostile_chat_support_access_is_a_scrubbed_protocol_error() -> None:
+    """Nested feature access exceptions reduce to safe generic protocol."""
+    features = cast("dict[str, object]", _supported_capabilities()["features"])
+    rejected = _supported_capabilities()
+    rejected["features"] = _HostileMapping(features, "chat_completions")
+
+    error = _assert_sanitized_protocol_failure(MappingProxyType(rejected))
+
+    assert type(error) is HermesProtocolError
+    assert _HOSTILE_ACCESS_CANARY not in "".join(traceback.format_exception(error))
+    _assert_package_traceback_is_scrubbed(
+        error,
+        canaries=(_HOSTILE_ACCESS_CANARY,),
+        forbidden_objects=(rejected, rejected["features"]),
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement", "error_type"),
+    [
+        ("object", "not.hermes", HermesIdentityError),
+        (
+            "features",
+            MappingProxyType({"chat_completions": False}),
+            HermesCapabilityError,
+        ),
+    ],
+)
+def test_staged_mapping_failure_precedes_hostile_normalization(
+    path: str,
+    replacement: object,
+    error_type: type[HermesProtocolError],
+) -> None:
+    """Safe staged classifications do not require hostile normalization."""
+    value = _supported_capabilities()
+    value[path] = replacement
+
+    with pytest.raises(error_type) as caught:
+        validate_capabilities(_HostileIterationMapping(value))
+    assert type(caught.value) is error_type
+
+
+def test_hostile_mapping_normalization_is_a_scrubbed_protocol_error() -> None:
+    """A post-stage normalization exception reduces to safe generic protocol."""
+    rejected = _HostileIterationMapping(_supported_capabilities())
+
+    error = _assert_sanitized_protocol_failure(rejected)
+
+    assert type(error) is HermesProtocolError
+    assert _HOSTILE_ITERATION_CANARY not in "".join(traceback.format_exception(error))
+    _assert_package_traceback_is_scrubbed(
+        error,
+        canaries=(_HOSTILE_ITERATION_CANARY,),
+        forbidden_objects=(rejected,),
+    )
 
 
 @pytest.mark.parametrize(
