@@ -23,17 +23,17 @@ Requirements for the Conversation Contract milestone. Each requirement maps to e
 
 - [x] **TOOL-01**: A Python consumer can import `ToolProgressStatus` and an immutable `ToolProgressEvent` carrying a 1-256 character `tool_call_id`, a 1-256 character `tool_name`, and exactly `RUNNING` or `COMPLETED` status.
 - [x] **TOOL-02**: A Python consumer receives `toolCallId`, tool name, and status as ordered correlated progress events, including repeated lifecycle records needed to detect unmatched running calls after interruption.
-- [ ] **TOOL-03**: Missing, malformed, unknown, over-bound, or duplicate approved tool-lifecycle fields fail as `HermesProtocolError`; every duplicate singleton lifecycle key is invalid even when duplicate values agree.
-- [ ] **TOOL-04**: Tool emoji, labels, arguments, results, other additive fields, and the raw tool payload never enter public models or exceptions.
+- [x] **TOOL-03**: Missing, malformed, unknown, over-bound, or duplicate approved tool-lifecycle fields fail as `HermesProtocolError`; every duplicate singleton lifecycle key is invalid even when duplicate values agree.
+- [x] **TOOL-04**: Tool emoji, labels, arguments, results, other additive fields, and the raw tool payload never enter public models or exceptions.
 
 ### Terminal Metadata
 
 - [x] **TERM-01**: A Python consumer can import `TerminalFailureReason`, and immutable `TerminalEvent` values expose `partial: bool = False` plus an optional closed failure reason.
-- [ ] **TERM-02**: `finish_reason="stop"` produces `SUCCESS`, `partial=False`, and no failure reason only when no abnormal terminal metadata is present.
-- [ ] **TERM-03**: `finish_reason="length"` or compatible `output_truncated` metadata produces `LENGTH`, `partial=True`, and `OUTPUT_TRUNCATED`.
-- [ ] **TERM-04**: `finish_reason="error"` preserves a strict server `partial` boolean, maps `agent_error` to `AGENT_ERROR`, and maps any other valid 1-256 character visible-ASCII safe error code to `UNKNOWN`.
-- [ ] **TERM-05**: Duplicate approved terminal lifecycle fields or incompatible `completed`, `failed`, `partial`, `error_code`, and `finish_reason` combinations fail as `HermesProtocolError` instead of applying precedence guesses.
-- [ ] **TERM-06**: Raw Hermes error text, messages, exception types, and error objects never enter public events or exceptions; disconnects remain `HermesTransportError`, cancellation remains `CancelledError`, and the client synthesizes no terminal event.
+- [x] **TERM-02**: `finish_reason="stop"` produces `SUCCESS`, `partial=False`, and no failure reason only when no abnormal terminal metadata is present.
+- [x] **TERM-03**: `finish_reason="length"` or compatible `output_truncated` metadata produces `LENGTH`, `partial=True`, and `OUTPUT_TRUNCATED`.
+- [x] **TERM-04**: `finish_reason="error"` preserves a strict server `partial` boolean, maps `agent_error` to `AGENT_ERROR`, and maps any other valid 1-256 character visible-ASCII safe error code to `UNKNOWN`.
+- [x] **TERM-05**: Duplicate approved terminal lifecycle fields or incompatible `completed`, `failed`, `partial`, `error_code`, and `finish_reason` combinations fail as `HermesProtocolError` instead of applying precedence guesses.
+- [x] **TERM-06**: Raw Hermes error text, messages, exception types, and error objects never enter public events or exceptions; disconnects remain `HermesTransportError`, cancellation remains `CancelledError`, and the client synthesizes no terminal event.
 - [ ] **TERM-07**: A terminal event becomes observable only after the complete response and suffix validate and response cleanup succeeds, preserving the existing terminal-order guarantee.
 
 ### Verification and Distribution
@@ -81,14 +81,14 @@ Each active requirement maps to exactly one v0.3.0 roadmap phase.
 | HTTP-02 | Phase 3 | Pending |
 | TOOL-01 | Phase 2 | Complete |
 | TOOL-02 | Phase 2 | Complete |
-| TOOL-03 | Phase 2 | Pending |
-| TOOL-04 | Phase 2 | Pending |
+| TOOL-03 | Phase 2 | Complete |
+| TOOL-04 | Phase 2 | Complete |
 | TERM-01 | Phase 2 | Complete |
-| TERM-02 | Phase 2 | Pending |
-| TERM-03 | Phase 2 | Pending |
-| TERM-04 | Phase 2 | Pending |
-| TERM-05 | Phase 2 | Pending |
-| TERM-06 | Phase 2 | Pending |
+| TERM-02 | Phase 2 | Complete |
+| TERM-03 | Phase 2 | Complete |
+| TERM-04 | Phase 2 | Complete |
+| TERM-05 | Phase 2 | Complete |
+| TERM-06 | Phase 2 | Complete |
 | TERM-07 | Phase 2 | Pending |
 | SECU-02 | Phase 4 | Pending |
 | VERI-02 | Phase 4 | Pending |
