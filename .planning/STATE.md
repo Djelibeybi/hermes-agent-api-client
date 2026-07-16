@@ -15,10 +15,8 @@ progress:
 
 # Project State
 
-Milestone v0.1.0 is complete. There is no active future phase.
-
-Start approved future work with `$gsd-new-milestone`; do not append speculative
-requirements or phases to this historical baseline.
+Milestone v0.3.0 defines the approved Conversation Contract work requested by
+the Hermes Conversation integration.
 
 ## Current Position
 
@@ -29,4 +27,4 @@ Last activity: 2026-07-16 — Milestone v0.3.0 started
 
 ## Operator Next Steps
 
-- Start the next milestone with $gsd-new-milestone
+- Define v0.3.0 requirements and create its roadmap.
