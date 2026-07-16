@@ -62,7 +62,7 @@ priority = 20
 [[repos.hooks]]
 id = "build"
 name = "build distributions"
-entry = "uv build"
+entry = "uv build --clear"
 language = "system"
 pass_filenames = false
 always_run = true

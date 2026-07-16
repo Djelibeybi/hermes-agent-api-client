@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import subprocess
 import sys
 import tarfile
@@ -365,6 +366,46 @@ def test_semantic_release_commits_the_stamped_lockfile() -> None:
         "uv run --no-sync python scripts/verify_dist.py dist/*.whl dist/*.tar.gz",
     ]
     assert semantic_release["assets"] == ["uv.lock"]
+
+
+def test_commit_build_gate_clears_stale_distribution_artifacts() -> None:
+    """The commit build gate cannot mix artifacts from different versions."""
+    project_root = Path(__file__).parents[1]
+    with (project_root / "prek.toml").open("rb") as prek_file:
+        hooks = tomllib.load(prek_file)["repos"][0]["hooks"]
+
+    build_hook = next(hook for hook in hooks if hook["id"] == "build")
+
+    assert build_hook["entry"] == "uv build --clear"
+
+
+def test_repository_ignore_rules_keep_the_lockfile_trackable(tmp_path: Path) -> None:
+    """Repository-local ignores never hide the committed release lockfile."""
+    project_root = Path(__file__).parents[1]
+    subprocess.run(
+        ["git", "init", "--quiet"],  # noqa: S607
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / ".gitignore").write_bytes((project_root / ".gitignore").read_bytes())
+    (tmp_path / ".git" / "info" / "exclude").write_text("")
+    (tmp_path / "uv.lock").touch()
+
+    result = subprocess.run(  # noqa: S603
+        [  # noqa: S607
+            "git",
+            "-c",
+            f"core.excludesFile={os.devnull}",
+            "check-ignore",
+            "--no-index",
+            "--quiet",
+            "uv.lock",
+        ],
+        cwd=tmp_path,
+        check=False,
+    )
+
+    assert result.returncode == 1
 
 
 @pytest.mark.parametrize(
