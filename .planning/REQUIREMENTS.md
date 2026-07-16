@@ -34,7 +34,7 @@ Requirements for the Conversation Contract milestone. Each requirement maps to e
 - [x] **TERM-04**: `finish_reason="error"` preserves a strict server `partial` boolean, maps `agent_error` to `AGENT_ERROR`, and maps any other valid 1-256 character visible-ASCII safe error code to `UNKNOWN`.
 - [x] **TERM-05**: Duplicate approved terminal lifecycle fields or incompatible `completed`, `failed`, `partial`, `error_code`, and `finish_reason` combinations fail as `HermesProtocolError` instead of applying precedence guesses.
 - [x] **TERM-06**: Raw Hermes error text, messages, exception types, and error objects never enter public events or exceptions; disconnects remain `HermesTransportError`, cancellation remains `CancelledError`, and the client synthesizes no terminal event.
-- [ ] **TERM-07**: A terminal event becomes observable only after the complete response and suffix validate and response cleanup succeeds, preserving the existing terminal-order guarantee.
+- [x] **TERM-07**: A terminal event becomes observable only after the complete response and suffix validate and response cleanup succeeds, preserving the existing terminal-order guarantee.
 
 ### Verification and Distribution
 
@@ -89,7 +89,7 @@ Each active requirement maps to exactly one v0.3.0 roadmap phase.
 | TERM-04 | Phase 2 | Complete |
 | TERM-05 | Phase 2 | Complete |
 | TERM-06 | Phase 2 | Complete |
-| TERM-07 | Phase 2 | Pending |
+| TERM-07 | Phase 2 | Complete |
 | SECU-02 | Phase 4 | Pending |
 | VERI-02 | Phase 4 | Pending |
 | PKG-02 | Phase 4 | Pending |

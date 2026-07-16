@@ -4,17 +4,17 @@ milestone: v0.3.0
 milestone_name: Conversation Contract
 current_phase: 02
 current_phase_name: conversation-event-contract
-status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-07-16T20:46:58.254Z"
+status: verifying
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-07-16T21:02:23.782Z"
 last_activity: 2026-07-17
-last_activity_desc: Plan 03 duplicate-aware correlated tool decoding completed
+last_activity_desc: Plan 04 total safe terminal metadata completed
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 4
-  completed_plans: 3
-  percent: 75
+  completed_plans: 4
+  percent: 100
 ---
 
 # Project State
@@ -28,12 +28,12 @@ See: `.planning/PROJECT.md` (updated 2026-07-17)
 
 ## Current Position
 
-Phase: 02 (conversation-event-contract) — EXECUTING
+Phase: 02 (conversation-event-contract) — VERIFYING
 Plan: 4 of 4
-Status: Ready to execute
-Last activity: 2026-07-17 — Plan 03 duplicate-aware correlated tool decoding completed
+Status: Phase complete — ready for verification
+Last activity: 2026-07-17 — Plan 04 total safe terminal metadata completed
 
-Progress: [████████░░] 75%
+Progress: [██████████] 100%
 
 ## Accumulated Context
 
@@ -51,6 +51,9 @@ Progress: [████████░░] 75%
 - [Phase 02]: Every JSON object remains a private pair node until event-specific duplicate checks complete. — This preserves duplicate evidence without replacing the bounded SSE framing state machine.
 - [Phase 02]: Tool projection retains only approved lifecycle facts while chat projection recursively materializes additive-compatible trees. — This satisfies tool secrecy and existing nested chat forward compatibility at the same boundary.
 - [Phase 02]: Root hermes and choice finish_reason duplicates fail before materialization. — Plan 02-04 can extend the same pair-aware seam to terminal lifecycle members without lost evidence.
+- [Phase 02]: Root hermes is projected into an omission-aware private DTO and excluded from ordinary chat-tree materialization. — Only approved lifecycle facts cross the trust boundary; raw error members are discarded.
+- [Phase 02]: The terminal mapper accepts only D-01 through D-03; explicit null finish_reason is nonterminal only without approved lifecycle facts. — Unlisted combinations fail closed without precedence guesses.
+- [Phase 02]: Unknown bounded safe error codes collapse to TerminalFailureReason.UNKNOWN. — Raw upstream codes never enter public or retained state.
 
 ### Historical Context
 
@@ -66,8 +69,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-16T20:46:39.376Z
-Stopped at: Completed 02-03-PLAN.md
+Last session: 2026-07-16T21:01:55.677Z
+Stopped at: Completed 02-04-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -77,3 +80,4 @@ Resume file: None
 | Phase 02 P01 | 7 min | 1 tasks | 7 files |
 | Phase 02 P02 | 18min | 2 tasks | 7 files |
 | Phase 02 P03 | 10min | 1 tasks | 6 files |
+| Phase 02 P04 | 9min | 1 tasks | 9 files |
