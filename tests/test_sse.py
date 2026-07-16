@@ -689,6 +689,42 @@ async def test_duplicate_approved_tool_members_fail_before_dictionary_collapse(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["root-hermes", "choice-finish-reason"])
+@pytest.mark.parametrize("conflicting", [False, True], ids=["same", "conflicting"])
+async def test_duplicate_approved_chat_members_fail_before_materialization(
+    path: str,
+    conflicting: object,
+) -> None:
+    """Chat duplicate evidence is checked before nested pairs become mappings."""
+    assert isinstance(conflicting, bool)
+    if path == "root-hermes":
+        duplicate = '{"partial":true}' if conflicting else '{"partial":false}'
+        members = (
+            (
+                "choices",
+                '[{"delta":{"content":"kept"},"finish_reason":null}]',
+            ),
+            ("hermes", '{"partial":false}'),
+            ("hermes", duplicate),
+        )
+    else:
+        duplicate = '"stop"' if conflicting else "null"
+        members = (
+            (
+                "choices",
+                "["
+                '{"delta":{"content":"kept"},'
+                f'"finish_reason":null,"finish_reason":{duplicate}'
+                "}]",
+            ),
+        )
+    record = raw_json_object_sse_record(members)
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((record + _canonical_records()[6],))
+
+
+@pytest.mark.asyncio
 async def test_duplicates_inside_ignored_additive_objects_remain_compatible() -> None:
     """Duplicate spelling outside approved paths does not become an alias."""
     progress = raw_json_object_sse_record(
