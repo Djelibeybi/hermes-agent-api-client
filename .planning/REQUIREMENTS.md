@@ -21,14 +21,14 @@ Requirements for the Conversation Contract milestone. Each requirement maps to e
 
 ### Tool Progress
 
-- [ ] **TOOL-01**: A Python consumer can import `ToolProgressStatus` and an immutable `ToolProgressEvent` carrying a 1-256 character `tool_call_id`, a 1-256 character `tool_name`, and exactly `RUNNING` or `COMPLETED` status.
-- [ ] **TOOL-02**: A Python consumer receives `toolCallId`, tool name, and status as ordered correlated progress events, including repeated lifecycle records needed to detect unmatched running calls after interruption.
+- [x] **TOOL-01**: A Python consumer can import `ToolProgressStatus` and an immutable `ToolProgressEvent` carrying a 1-256 character `tool_call_id`, a 1-256 character `tool_name`, and exactly `RUNNING` or `COMPLETED` status.
+- [x] **TOOL-02**: A Python consumer receives `toolCallId`, tool name, and status as ordered correlated progress events, including repeated lifecycle records needed to detect unmatched running calls after interruption.
 - [ ] **TOOL-03**: Missing, malformed, unknown, over-bound, or duplicate approved tool-lifecycle fields fail as `HermesProtocolError`; every duplicate singleton lifecycle key is invalid even when duplicate values agree.
 - [ ] **TOOL-04**: Tool emoji, labels, arguments, results, other additive fields, and the raw tool payload never enter public models or exceptions.
 
 ### Terminal Metadata
 
-- [ ] **TERM-01**: A Python consumer can import `TerminalFailureReason`, and immutable `TerminalEvent` values expose `partial: bool = False` plus an optional closed failure reason.
+- [x] **TERM-01**: A Python consumer can import `TerminalFailureReason`, and immutable `TerminalEvent` values expose `partial: bool = False` plus an optional closed failure reason.
 - [ ] **TERM-02**: `finish_reason="stop"` produces `SUCCESS`, `partial=False`, and no failure reason only when no abnormal terminal metadata is present.
 - [ ] **TERM-03**: `finish_reason="length"` or compatible `output_truncated` metadata produces `LENGTH`, `partial=True`, and `OUTPUT_TRUNCATED`.
 - [ ] **TERM-04**: `finish_reason="error"` preserves a strict server `partial` boolean, maps `agent_error` to `AGENT_ERROR`, and maps any other valid 1-256 character visible-ASCII safe error code to `UNKNOWN`.
@@ -79,11 +79,11 @@ Each active requirement maps to exactly one v0.3.0 roadmap phase.
 | SESS-04 | Phase 3 | Pending |
 | SESS-05 | Phase 3 | Pending |
 | HTTP-02 | Phase 3 | Pending |
-| TOOL-01 | Phase 2 | Pending |
-| TOOL-02 | Phase 2 | Pending |
+| TOOL-01 | Phase 2 | Complete |
+| TOOL-02 | Phase 2 | Complete |
 | TOOL-03 | Phase 2 | Pending |
 | TOOL-04 | Phase 2 | Pending |
-| TERM-01 | Phase 2 | Pending |
+| TERM-01 | Phase 2 | Complete |
 | TERM-02 | Phase 2 | Pending |
 | TERM-03 | Phase 2 | Pending |
 | TERM-04 | Phase 2 | Pending |
@@ -96,6 +96,7 @@ Each active requirement maps to exactly one v0.3.0 roadmap phase.
 | DEPS-01 | Phase 4 | Pending |
 
 **Coverage:**
+
 - v0.3.0 requirements: 21 total
 - Mapped to phases: 21
 - Unmapped: 0
