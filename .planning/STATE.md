@@ -4,17 +4,17 @@ milestone: v0.3.0
 milestone_name: Conversation Contract
 current_phase: 02
 current_phase_name: conversation-event-contract
-status: verifying
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-07-16T21:02:23.782Z"
+status: executing
+stopped_at: Planned 02-05-PLAN.md gap closure
+last_updated: "2026-07-16T21:34:34.420Z"
 last_activity: 2026-07-17
-last_activity_desc: Plan 04 total safe terminal metadata completed
+last_activity_desc: Phase 02 provenance gap closure planned
 progress:
   total_phases: 3
-  completed_phases: 1
-  total_plans: 4
+  completed_phases: 0
+  total_plans: 5
   completed_plans: 4
-  percent: 100
+  percent: 80
 ---
 
 # Project State
@@ -28,12 +28,12 @@ See: `.planning/PROJECT.md` (updated 2026-07-17)
 
 ## Current Position
 
-Phase: 02 (conversation-event-contract) — VERIFYING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
-Last activity: 2026-07-17 — Plan 04 total safe terminal metadata completed
+Phase: 02 (conversation-event-contract) — PLANNED
+Plan: 4 of 5
+Status: Ready to execute
+Last activity: 2026-07-17 — Phase 02 provenance gap closure planned
 
-Progress: [██████████] 100%
+Progress: [████████░░] 80%
 
 ## Accumulated Context
 
@@ -70,7 +70,7 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-07-16T21:01:55.677Z
-Stopped at: Completed 02-04-PLAN.md
+Stopped at: Planned 02-05-PLAN.md gap closure
 Resume file: None
 
 ## Performance Metrics

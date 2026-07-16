@@ -16,7 +16,7 @@ policy remain owned by `hermes-conversation`.
 
 ## Phases
 
-- [x] **Phase 2: Conversation Event Contract** — Expose bounded correlated tool progress and strict safe terminal metadata without raw upstream data. (completed 2026-07-17)
+- [ ] **Phase 2: Conversation Event Contract** — Expose bounded correlated tool progress and strict safe terminal metadata without raw upstream data.
 - [ ] **Phase 3: Session Header Safety** — Transport independently optional opaque session values with exact validation, secrecy, isolation, and response ownership.
 - [ ] **Phase 4: Contract and Distribution Verification** — Prove the complete v0.3.0 contract from source and built artifacts against current compatible dependencies.
 
@@ -35,7 +35,7 @@ policy remain owned by `hermes-conversation`.
   4. Every duplicate approved terminal key or contradictory `completed`, `failed`, `partial`, `error_code`, and `finish_reason` combination fails as `HermesProtocolError` instead of being resolved by precedence.
   5. Terminal events remain withheld until the response and suffix validate and cleanup succeeds; raw upstream error details stay private, transport disconnects remain transport errors, and cancellation produces no synthetic terminal event.
 
-**Plans:** 4/4 plans complete
+**Plans:** 4/5 plans complete
 
 Plans:
 **Wave 1**
@@ -50,6 +50,10 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 02-04-PLAN.md — Map strict safe terminal metadata through the delayed-delivery gate.
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 02-05-PLAN.md — Bind provenance to external release identity and validate newer-tag equivalence from immutable evidence bytes.
 
 ### Phase 3: Session Header Safety
 
