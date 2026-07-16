@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Annotated, ClassVar, Literal, Never
+from enum import StrEnum
+from typing import Annotated, ClassVar, Literal, Never, cast
 
 from pydantic import (
     BaseModel,
@@ -43,11 +45,6 @@ def _validate_transient(transient: object) -> None:
     """Require an explicit real boolean transport classification."""
     if not isinstance(transient, bool):
         raise TypeError
-
-
-def _raise_protocol_failure() -> Never:
-    """Raise a fresh protocol failure from a raw-input-free frame."""
-    raise HermesProtocolError
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -96,6 +93,33 @@ class HermesProtocolError(HermesContractError):
             status_code=None,
             retryable=False,
         )
+
+
+class HermesIdentityError(HermesProtocolError):
+    """A capability document does not identify a Hermes Agent endpoint."""
+
+    __slots__ = ()
+
+
+class HermesCapabilityError(HermesProtocolError):
+    """A Hermes endpoint lacks required Chat Completions support."""
+
+    __slots__ = ()
+
+
+class _CapabilityFailureKind(StrEnum):
+    IDENTITY = "identity"
+    CAPABILITY = "capability"
+    PROTOCOL = "protocol"
+
+
+def _raise_capability_failure(kind: _CapabilityFailureKind) -> Never:
+    """Raise the exact safe capability failure from an input-free frame."""
+    if kind is _CapabilityFailureKind.IDENTITY:
+        raise HermesIdentityError
+    if kind is _CapabilityFailureKind.CAPABILITY:
+        raise HermesCapabilityError
+    raise HermesProtocolError
 
 
 class HermesAuthenticationError(HermesContractError):
@@ -189,8 +213,16 @@ class _FeaturesWire(_WireModel):
 class _CapabilitiesWire(_WireModel):
     object: Literal["hermes.api_server.capabilities"]
     platform: Literal["hermes-agent"]
+    model: Annotated[str, StringConstraints(min_length=1, max_length=255)]
     auth: _AuthWire
     features: _FeaturesWire
+
+    @field_validator("model")
+    @classmethod
+    def _reject_whitespace_only_model(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError
+        return value
 
 
 type _NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
@@ -223,12 +255,124 @@ class _ChatChunkWire(_WireModel):
     usage: _UsageWire | None = None
 
 
-def _parse_capabilities(value: object) -> _CapabilitiesWire | None:
-    """Parse supported wire semantics without retaining validation details."""
+_MAPPING_ACCESS_FAILURE = object()
+_STRING_COMPARISON_FAILURE = object()
+
+
+def _safe_mapping_get(mapping: Mapping[object, object], key: str) -> object:
+    """Read one mapping value or return an input-independent sentinel."""
     try:
-        return _CapabilitiesWire.model_validate(value)
-    except ValidationError:
+        return mapping.get(key)
+    except Exception:  # noqa: BLE001 - hostile mappings reduce to safe metadata
+        return _MAPPING_ACCESS_FAILURE
+
+
+def _safe_exact_string_match(value: object, expected: str) -> object:
+    """Compare one string or return an input-independent failure sentinel."""
+    if not isinstance(value, str):
+        return False
+    try:
+        return value == expected
+    except Exception:  # noqa: BLE001 - hostile strings reduce to safe metadata
+        return _STRING_COMPARISON_FAILURE
+
+
+def _classify_capability_identity(
+    document: Mapping[object, object],
+) -> _CapabilityFailureKind | None:
+    """Classify the required identity discriminators in wire order."""
+    object_value = _safe_mapping_get(document, "object")
+    if object_value is _MAPPING_ACCESS_FAILURE:
+        return _CapabilityFailureKind.PROTOCOL
+    object_matches = _safe_exact_string_match(
+        object_value,
+        "hermes.api_server.capabilities",
+    )
+    if object_matches is _STRING_COMPARISON_FAILURE:
+        return _CapabilityFailureKind.PROTOCOL
+    if object_matches is not True:
+        return _CapabilityFailureKind.IDENTITY
+
+    platform_value = _safe_mapping_get(document, "platform")
+    if platform_value is _MAPPING_ACCESS_FAILURE:
+        return _CapabilityFailureKind.PROTOCOL
+    platform_matches = _safe_exact_string_match(platform_value, "hermes-agent")
+    if platform_matches is _STRING_COMPARISON_FAILURE:
+        return _CapabilityFailureKind.PROTOCOL
+    return None if platform_matches is True else _CapabilityFailureKind.IDENTITY
+
+
+def _classify_required_chat_support(
+    document: Mapping[object, object],
+) -> tuple[Mapping[object, object] | None, _CapabilityFailureKind | None]:
+    """Return mapping-valued features or the safe required-chat failure."""
+    features = _safe_mapping_get(document, "features")
+    if features is _MAPPING_ACCESS_FAILURE:
+        return (None, _CapabilityFailureKind.PROTOCOL)
+    if not isinstance(features, Mapping):
+        return (None, _CapabilityFailureKind.CAPABILITY)
+
+    feature_values = cast("Mapping[object, object]", features)
+    chat_completions = _safe_mapping_get(feature_values, "chat_completions")
+    if chat_completions is _MAPPING_ACCESS_FAILURE:
+        return (None, _CapabilityFailureKind.PROTOCOL)
+    if chat_completions is not True:
+        return (None, _CapabilityFailureKind.CAPABILITY)
+    return (feature_values, None)
+
+
+def _normalize_capability_mapping(
+    document: Mapping[object, object],
+    features: Mapping[object, object],
+) -> dict[object, object] | None:
+    """Copy known mappings for Pydantic without leaking mapping failures."""
+    try:
+        normalized = dict(document)
+        auth = normalized.get("auth")
+        if isinstance(auth, Mapping):
+            normalized["auth"] = dict(cast("Mapping[object, object]", auth))
+        normalized["features"] = dict(features)
+    except Exception:  # noqa: BLE001 - hostile mappings reduce to safe metadata
         return None
+    return normalized
+
+
+def _parse_capabilities(
+    value: object,
+) -> tuple[HermesCapabilities | None, _CapabilityFailureKind | None]:
+    """Reduce capability validation into a public value or safe failure kind."""
+    if not isinstance(value, Mapping):
+        return (None, _CapabilityFailureKind.PROTOCOL)
+
+    document = cast("Mapping[object, object]", value)
+    identity_failure = _classify_capability_identity(document)
+    if identity_failure is not None:
+        return (None, identity_failure)
+
+    features, capability_failure = _classify_required_chat_support(document)
+    if capability_failure is not None:
+        return (None, capability_failure)
+    normalized = _normalize_capability_mapping(
+        document,
+        cast("Mapping[object, object]", features),
+    )
+    if normalized is None:
+        return (None, _CapabilityFailureKind.PROTOCOL)
+
+    try:
+        parsed = _CapabilitiesWire.model_validate(normalized)
+        capabilities = HermesCapabilities(
+            object=parsed.object,
+            platform=parsed.platform,
+            model=parsed.model,
+            auth_type=parsed.auth.type,
+            auth_required=parsed.auth.required,
+            chat_completions=parsed.features.chat_completions,
+            chat_completions_streaming=parsed.features.chat_completions_streaming,
+        )
+    except ValidationError:
+        return (None, _CapabilityFailureKind.PROTOCOL)
+    return (capabilities, None)
 
 
 def _parse_tool_progress(  # pyright: ignore[reportUnusedFunction]
@@ -253,15 +397,9 @@ def _parse_chat_chunk(  # pyright: ignore[reportUnusedFunction]
 
 def validate_capabilities(value: object) -> HermesCapabilities:
     """Validate the minimum forward-compatible Hermes capability semantics."""
-    parsed = _parse_capabilities(value)
-    if parsed is None:
+    parsed, failure_kind = _parse_capabilities(value)
+    if failure_kind is not None:
         value = None
-        _raise_protocol_failure()
-    return HermesCapabilities(
-        object=parsed.object,
-        platform=parsed.platform,
-        auth_type=parsed.auth.type,
-        auth_required=parsed.auth.required,
-        chat_completions=parsed.features.chat_completions,
-        chat_completions_streaming=parsed.features.chat_completions_streaming,
-    )
+        parsed = None
+        _raise_capability_failure(failure_kind)
+    return cast("HermesCapabilities", parsed)

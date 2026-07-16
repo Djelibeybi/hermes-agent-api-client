@@ -20,34 +20,40 @@
   "fixtures": [
     {
       "path": "capabilities/supported.json",
-      "sha256": "deed6356af3c934c9c55967c20c93973a097b2885e0580feaf1a19d82d90b00c",
+      "sha256": "0e8a7a863d9fe99a90583fb84faddc03385e75db3a4cd6b513c5e5d0c82d7005",
       "hermes_release": "v2026.7.7.2",
       "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
-      "upstream_url": "https://github.com/NousResearch/hermes-agent/blob/v2026.7.7.2/gateway/platforms/api_server.py#L1458-L1535",
-      "capture_date": "2026-07-14",
-      "purpose": "Canonical supported capability response for the isolated client contract.",
+      "upstream_url": "https://github.com/NousResearch/hermes-agent/blob/9de9c25f620ff7f1ce0fd5457d596052d5159596/gateway/platforms/api_server.py#L1458-L1535",
+      "capture_date": "2026-07-16",
+      "purpose": "Immutable output from the tagged capability handler for the isolated client contract.",
       "fixture_kind": "capabilities",
-      "evidence_kind": "minimized-derived",
+      "evidence_kind": "immutable-tag-capture",
       "reproduction": {
-        "mode": "manual-reviewed-derivation",
+        "mode": "detached-tag-handler-invocation",
         "procedure": [
-          "Inspect the capability handler at the pinned source commit and tag.",
-          "Retain only object, platform, auth, chat-completions, streaming, and tool-progress fields exercised by the locked Phase 1 contract.",
-          "Serialize the resulting object with two-space JSON indentation and a trailing newline, then update the reviewed SHA-256."
+          "Clone the upstream repository, detach at commit 9de9c25f620ff7f1ce0fd5457d596052d5159596, and verify tag v2026.7.7.2 peels to that commit.",
+          "Clear API_SERVER_MODEL_NAME, select the default profile, and construct APIServerAdapter with configured bearer key fixture-capture-key.",
+          "Invoke APIServerAdapter._handle_capabilities with Authorization: Bearer fixture-capture-key, parse the HTTP 200 response body, and preserve the complete returned object.",
+          "Serialize the parsed object with two-space JSON indentation and one trailing newline, then record the SHA-256."
         ],
         "configuration": {
-          "authentication": "bearer-required",
+          "authentication": "configured-bearer-required",
+          "active_profile": "default",
+          "api_server_model_name": "unset",
+          "fallback_model": "hermes-agent",
           "chat_completions": true,
           "chat_completions_streaming": true,
           "tool_progress_events": true,
+          "handler_invoked": true,
           "live_server_invoked": false
         }
       },
       "semantic_assertions": [
-        "document identifies hermes.api_server.capabilities on hermes-agent",
+        "complete handler response identifies hermes.api_server.capabilities on hermes-agent",
+        "fallback model is advertised exactly as hermes-agent",
         "bearer authentication is required",
         "chat completions and streaming are enabled",
-        "unknown additive response fields remain outside the minimum fixture contract"
+        "additive runtime, feature, and endpoint fields are preserved in the immutable capture"
       ]
     },
     {

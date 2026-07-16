@@ -7,6 +7,7 @@ import io
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
 from email.parser import BytesParser
 from email.policy import default
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
     from email.message import Message
 
 
+_PROJECT_ROOT = Path(__file__).parents[1]
 _EXPECTED_ARCHIVES_MESSAGE = (
     "distribution verification failed: expected one wheel and one sdist"
 )
@@ -63,7 +65,6 @@ _EXPECTED_DEPENDENCIES = {
 }
 _EXPECTED_SINGLETON_METADATA = {
     "Name": "hermes-agent-api-client",
-    "Version": "0.1.0",
     "Requires-Python": ">=3.13",
     "License-Expression": "UPL-1.0",
 }
@@ -120,6 +121,25 @@ class _BoundedReader(io.RawIOBase):
 def _fail(message: str) -> Never:
     """Raise a verifier failure without retaining an upstream exception."""
     raise VerificationError(message)
+
+
+def _project_version() -> str:
+    """Return the expected artifact version from safe source metadata."""
+    try:
+        with (_PROJECT_ROOT / "pyproject.toml").open("rb") as project_file:
+            project_data = tomllib.load(project_file)
+        version_value = project_data["project"]["version"]
+    except (
+        KeyError,
+        OSError,
+        tomllib.TOMLDecodeError,
+        TypeError,
+        UnicodeDecodeError,
+    ):
+        _fail(_INVALID_METADATA_MESSAGE)
+    if not isinstance(version_value, str) or not version_value:
+        _fail(_INVALID_METADATA_MESSAGE)
+    return version_value
 
 
 def _resolve_archives(arguments: Sequence[str]) -> tuple[Path, Path]:
@@ -186,15 +206,22 @@ def _sdist_names_are_valid(
     )
 
 
-def _metadata_is_valid(package_metadata: Message) -> bool:
+def _metadata_is_valid(
+    package_metadata: Message,
+    expected_version: str,
+) -> bool:
     """Validate the exact public wheel metadata contract."""
     dependencies = package_metadata.get_all("Requires-Dist", [])
+    expected_singleton_metadata = {
+        **_EXPECTED_SINGLETON_METADATA,
+        "Version": expected_version,
+    }
     return (
         not package_metadata.defects
         and all(
             len(values := package_metadata.get_all(field, [])) == 1
             and values[0] == expected
-            for field, expected in _EXPECTED_SINGLETON_METADATA.items()
+            for field, expected in expected_singleton_metadata.items()
         )
         and set(dependencies) == _EXPECTED_DEPENDENCIES
         and len(dependencies) == len(_EXPECTED_DEPENDENCIES)
@@ -223,7 +250,7 @@ def _verify_isolated_imports(extraction_root: Path) -> None:
         _fail(_IMPORT_FAILURE_MESSAGE)
 
 
-def _verify_wheel(wheel_path: Path) -> None:
+def _verify_wheel(wheel_path: Path, expected_version: str) -> None:
     """Validate wheel members, metadata, and isolated public imports."""
     try:
         with zipfile.ZipFile(wheel_path) as wheel:
@@ -249,7 +276,7 @@ def _verify_wheel(wheel_path: Path) -> None:
                 )
             except (KeyError, ValueError):
                 _fail(_INVALID_METADATA_MESSAGE)
-            if not _metadata_is_valid(package_metadata):
+            if not _metadata_is_valid(package_metadata, expected_version):
                 _fail(_INVALID_METADATA_MESSAGE)
 
             with TemporaryDirectory() as temporary_directory:
@@ -323,7 +350,8 @@ def main(arguments: Sequence[str]) -> int:
     """Verify the requested archives and return a process exit status."""
     try:
         wheel_path, sdist_path = _resolve_archives(arguments)
-        _verify_wheel(wheel_path)
+        expected_version = _project_version()
+        _verify_wheel(wheel_path, expected_version)
         _verify_sdist(sdist_path)
     except VerificationError as error:
         sys.stderr.write(f"{error}\n")

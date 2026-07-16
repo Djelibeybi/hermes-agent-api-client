@@ -33,18 +33,18 @@ always_run = true
 priority = 10
 
 [[repos.hooks]]
-id = "pyright"
-name = "Pyright"
-entry = "uv run pyright"
+id = "basedpyright"
+name = "basedpyright"
+entry = "uv run --no-sync basedpyright"
 language = "system"
 pass_filenames = false
 always_run = true
 priority = 10
 
 [[repos.hooks]]
-id = "pyright-verifytypes"
-name = "Pyright verifytypes"
-entry = "uv run pyright --verifytypes hermes_agent_api_client --ignoreexternal"
+id = "basedpyright-verifytypes"
+name = "basedpyright verifytypes"
+entry = "uv run --no-sync basedpyright --verifytypes hermes_agent_api_client --ignoreexternal"
 language = "system"
 pass_filenames = false
 always_run = true

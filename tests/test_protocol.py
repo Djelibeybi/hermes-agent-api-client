@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import traceback
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast, get_args
 
 import pytest
@@ -25,13 +30,75 @@ from hermes_agent_api_client import (
     UsageEvent,
 )
 from hermes_agent_api_client.models import FailureCategory
-from hermes_agent_api_client.protocol import validate_capabilities
-from tests.helpers.hermes import add_json_key, load_golden_json, reorder_json_keys
+from hermes_agent_api_client.protocol import (
+    HermesCapabilityError,
+    HermesIdentityError,
+    validate_capabilities,
+)
+from tests.helpers.hermes import (
+    add_json_key,
+    load_golden_bytes,
+    load_golden_json,
+    remove_json_key,
+    reorder_json_keys,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
 _EVENT_RECORD_COUNT = 7
+_MODEL_MAX_LENGTH = 255
+_HOSTILE_ACCESS_CANARY = "hostile-mapping-access-canary"
+_HOSTILE_EQUALITY_CANARY = "hostile-string-equality-canary"
+_HOSTILE_ITERATION_CANARY = "hostile-mapping-iteration-canary"
+
+
+class _HostileMapping(Mapping[str, object]):
+    """A mapping whose key access raises a private upstream detail."""
+
+    def __init__(self, values: dict[str, object], fail_key: str) -> None:
+        self._values = values
+        self._fail_key = fail_key
+
+    def __getitem__(self, key: str) -> object:
+        if key == self._fail_key:
+            raise RuntimeError(_HOSTILE_ACCESS_CANARY)
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+
+class _HostileIterationMapping(Mapping[str, object]):
+    """A readable mapping whose normalization exposes a private failure."""
+
+    def __init__(self, values: dict[str, object]) -> None:
+        self._values = values
+
+    def __getitem__(self, key: str) -> object:
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        raise RuntimeError(_HOSTILE_ITERATION_CANARY)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+
+class _HostileString(str):
+    """A string whose discriminator comparison raises a private detail."""
+
+    __slots__ = ()
+    __hash__ = str.__hash__
+
+    def __eq__(self, value: object) -> bool:
+        raise RuntimeError(_HOSTILE_EQUALITY_CANARY)
+
+    def __ne__(self, value: object) -> bool:
+        return self.__eq__(value)
 
 
 def _supported_capabilities() -> dict[str, Any]:
@@ -103,6 +170,62 @@ def _assert_package_traceback_is_scrubbed(
                 pending.extend(cast("Iterable[object]", referenced))
 
 
+def test_capability_fixture_matches_immutable_tag_provenance() -> None:
+    """The complete captured handler bytes match their immutable provenance."""
+    payload = load_golden_bytes("capabilities/supported.json")
+    provenance = load_golden_json("provenance.json")
+    capability_entry = next(
+        entry
+        for entry in provenance["fixtures"]
+        if entry["path"] == "capabilities/supported.json"
+    )
+    assert provenance["hermes_release"] == "v2026.7.7.2"
+    assert provenance["source_commit"] == ("9de9c25f620ff7f1ce0fd5457d596052d5159596")
+    assert capability_entry["evidence_kind"] == "immutable-tag-capture"
+    assert hashlib.sha256(payload).hexdigest() == capability_entry["sha256"]
+    assert json.loads(payload)["model"] == "hermes-agent"
+
+
+def test_supported_capabilities_expose_an_immutable_model() -> None:
+    """A supported response exposes its exact model on the frozen public value."""
+    result = validate_capabilities(_supported_capabilities())
+    assert result.model == "hermes-agent"
+    with pytest.raises(ValidationError, match="Instance is frozen"):
+        result.model = "changed"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("model", ["", " ", "\t\n", 7, None, True])
+def test_invalid_model_values_are_protocol_failures(model: object) -> None:
+    """Invalid wire model values collapse into the safe protocol failure."""
+    value = _supported_capabilities()
+    value["model"] = model
+    _assert_sanitized_protocol_failure(value)
+
+
+@pytest.mark.parametrize("model", ["", " \t", "m" * (_MODEL_MAX_LENGTH + 1)])
+def test_public_capabilities_reject_invalid_model_names(model: str) -> None:
+    """Direct public model construction enforces the same bounded contract."""
+    value = validate_capabilities(_supported_capabilities()).model_dump()
+    value["model"] = model
+    with pytest.raises(ValidationError):
+        HermesCapabilities.model_validate(value)
+
+
+def test_model_boundary_preserves_the_exact_advertised_value() -> None:
+    """Valid boundary whitespace is retained rather than normalized."""
+    value = _supported_capabilities()
+    value["model"] = " " + "m" * (_MODEL_MAX_LENGTH - 2) + " "
+    result = validate_capabilities(value)
+    assert result.model == value["model"]
+
+
+def test_over_limit_model_is_a_protocol_failure() -> None:
+    """A model name beyond 255 code points is a safe protocol failure."""
+    value = _supported_capabilities()
+    value["model"] = "m" * (_MODEL_MAX_LENGTH + 1)
+    _assert_sanitized_protocol_failure(value)
+
+
 def test_supported_capabilities_produce_an_immutable_typed_value() -> None:
     """The canonical document maps to the exact supported semantic contract."""
     result = validate_capabilities(_supported_capabilities())
@@ -110,6 +233,7 @@ def test_supported_capabilities_produce_an_immutable_typed_value() -> None:
     assert result == HermesCapabilities(
         object="hermes.api_server.capabilities",
         platform="hermes-agent",
+        model="hermes-agent",
         auth_type="bearer",
         auth_required=True,
         chat_completions=True,
@@ -204,6 +328,7 @@ def test_unsupported_semantics_are_safe_protocol_failures(
     [
         ("object",),
         ("platform",),
+        ("model",),
         ("auth",),
         ("auth", "type"),
         ("auth", "required"),
@@ -227,31 +352,336 @@ def test_missing_required_fields_are_safe_protocol_failures(
     _assert_sanitized_protocol_failure(value)
 
 
-def test_invalid_capability_context_and_cause_exclude_canary_values() -> None:
-    """Pydantic details and raw invalid values never escape validation."""
-    canary = "Bearer sk-capability-validation-canary"
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("object",), None),
+        (("object",), "not.hermes"),
+        (("platform",), None),
+        (("platform",), "not-hermes-agent"),
+    ],
+)
+def test_invalid_identity_maps_to_identity_error(
+    path: tuple[str, ...], replacement: object
+) -> None:
+    """Invalid Hermes discriminators have one exact identity failure type."""
     value = _supported_capabilities()
-    value["platform"] = canary
+    value[path[0]] = replacement
+    with pytest.raises(HermesIdentityError) as caught:
+        validate_capabilities(value)
+    assert type(caught.value) is HermesIdentityError
+    assert isinstance(caught.value, HermesProtocolError)
 
-    error = _assert_sanitized_protocol_failure(value)
+
+@pytest.mark.parametrize(
+    "features",
+    [None, {}, {"chat_completions": False}, {"chat_completions": 1}],
+)
+def test_required_chat_support_maps_to_capability_error(features: object) -> None:
+    """Missing or invalid Chat Completions support is a capability failure."""
+    value = _supported_capabilities()
+    value["features"] = features
+    with pytest.raises(HermesCapabilityError) as caught:
+        validate_capabilities(value)
+    assert type(caught.value) is HermesCapabilityError
+    assert isinstance(caught.value, HermesProtocolError)
+
+
+def test_identity_failure_precedes_capability_failure() -> None:
+    """Identity classification wins when both validation stages are invalid."""
+    value = _supported_capabilities()
+    value["object"] = "identity-canary"
+    value["features"] = None
+    with pytest.raises(HermesIdentityError):
+        validate_capabilities(value)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("auth", "type"), "none"),
+        (("auth", "required"), False),
+        (("features", "chat_completions_streaming"), False),
+        (("model",), ""),
+    ],
+)
+def test_other_valid_identity_failures_remain_generic_protocol_errors(
+    path: tuple[str, ...], replacement: object
+) -> None:
+    """Failures after identity and required-chat checks remain generic."""
+    value = _supported_capabilities()
+    target = value
+    for key in path[:-1]:
+        target = cast("dict[str, Any]", target[key])
+    target[path[-1]] = replacement
+    with pytest.raises(HermesProtocolError) as caught:
+        validate_capabilities(value)
+    assert type(caught.value) is HermesProtocolError
+
+
+@pytest.mark.parametrize("path", [("object",), ("platform",)])
+def test_missing_identity_discriminator_maps_to_identity_error(
+    path: tuple[str, ...],
+) -> None:
+    """Missing identity discriminators use the exact identity failure type."""
+    value = remove_json_key(_supported_capabilities(), path)
+    with pytest.raises(HermesIdentityError) as caught:
+        validate_capabilities(value)
+    assert type(caught.value) is HermesIdentityError
+
+
+def test_missing_chat_completions_maps_to_capability_error() -> None:
+    """A missing required Chat Completions key is a capability failure."""
+    value = remove_json_key(_supported_capabilities(), ("features", "chat_completions"))
+    with pytest.raises(HermesCapabilityError) as caught:
+        validate_capabilities(value)
+    assert type(caught.value) is HermesCapabilityError
+
+
+def test_missing_identity_precedes_missing_chat_completions() -> None:
+    """A missing discriminator wins over a missing required capability."""
+    value = remove_json_key(_supported_capabilities(), ("platform",))
+    value = remove_json_key(value, ("features", "chat_completions"))
+    with pytest.raises(HermesIdentityError):
+        validate_capabilities(value)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        ("object", None),
+        ("object", "not.hermes"),
+        ("platform", None),
+        ("platform", "not-hermes-agent"),
+    ],
+)
+def test_non_dict_mapping_identity_failures_are_exact(
+    path: str,
+    replacement: object,
+) -> None:
+    """Mapping semantics retain exact missing and invalid identity failures."""
+    value = _supported_capabilities()
+    if replacement is None:
+        del value[path]
+    else:
+        value[path] = replacement
+
+    with pytest.raises(HermesIdentityError) as caught:
+        validate_capabilities(MappingProxyType(value))
+    assert type(caught.value) is HermesIdentityError
+
+
+@pytest.mark.parametrize(
+    "features",
+    [
+        cast("Mapping[str, object]", MappingProxyType({})),
+        cast(
+            "Mapping[str, object]",
+            MappingProxyType({"chat_completions": False}),
+        ),
+        cast(
+            "Mapping[str, object]",
+            MappingProxyType({"chat_completions": 1}),
+        ),
+    ],
+)
+def test_non_dict_mapping_chat_failures_are_exact(
+    features: Mapping[str, object],
+) -> None:
+    """Mapping-valued missing or invalid required chat support is classified."""
+    value = _supported_capabilities()
+    value["features"] = features
+
+    with pytest.raises(HermesCapabilityError) as caught:
+        validate_capabilities(MappingProxyType(value))
+    assert type(caught.value) is HermesCapabilityError
+
+
+def test_complete_non_dict_mappings_produce_immutable_capabilities() -> None:
+    """Complete mapping inputs validate into the public immutable value."""
+    value = _supported_capabilities()
+    value["features"] = MappingProxyType(cast("dict[str, object]", value["features"]))
+
+    result = validate_capabilities(MappingProxyType(value))
+
+    assert result == validate_capabilities(_supported_capabilities())
+    with pytest.raises(ValidationError, match="Instance is frozen"):
+        result.platform = "changed"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("fail_key", ["object", "platform", "features"])
+def test_hostile_mapping_access_becomes_a_scrubbed_generic_protocol_error(
+    fail_key: str,
+) -> None:
+    """Mapping access exceptions and their inputs cannot escape validation."""
+    rejected = _HostileMapping(_supported_capabilities(), fail_key)
+
+    error = _assert_sanitized_protocol_failure(rejected)
+
+    assert type(error) is HermesProtocolError
+    assert _HOSTILE_ACCESS_CANARY not in "".join(traceback.format_exception(error))
+    _assert_package_traceback_is_scrubbed(
+        error,
+        canaries=(_HOSTILE_ACCESS_CANARY,),
+        forbidden_objects=(rejected,),
+    )
+
+
+def test_hostile_chat_support_access_is_a_scrubbed_protocol_error() -> None:
+    """Nested feature access exceptions reduce to safe generic protocol."""
+    features = cast("dict[str, object]", _supported_capabilities()["features"])
+    rejected = _supported_capabilities()
+    rejected["features"] = _HostileMapping(features, "chat_completions")
+
+    error = _assert_sanitized_protocol_failure(MappingProxyType(rejected))
+
+    assert type(error) is HermesProtocolError
+    assert _HOSTILE_ACCESS_CANARY not in "".join(traceback.format_exception(error))
+    _assert_package_traceback_is_scrubbed(
+        error,
+        canaries=(_HOSTILE_ACCESS_CANARY,),
+        forbidden_objects=(rejected, rejected["features"]),
+    )
+
+
+@pytest.mark.parametrize("path", ["object", "platform"])
+def test_hostile_discriminator_equality_is_a_scrubbed_protocol_error(
+    path: str,
+) -> None:
+    """Discriminator comparison exceptions reduce to safe generic protocol."""
+    rejected = _supported_capabilities()
+    hostile_value = _HostileString(cast("str", rejected[path]))
+    rejected[path] = hostile_value
+
+    error = _assert_sanitized_protocol_failure(rejected)
+
+    assert type(error) is HermesProtocolError
+    assert _HOSTILE_EQUALITY_CANARY not in "".join(traceback.format_exception(error))
+    _assert_package_traceback_is_scrubbed(
+        error,
+        canaries=(_HOSTILE_EQUALITY_CANARY,),
+        forbidden_objects=(rejected, hostile_value),
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement", "error_type"),
+    [
+        ("object", "not.hermes", HermesIdentityError),
+        (
+            "features",
+            MappingProxyType({"chat_completions": False}),
+            HermesCapabilityError,
+        ),
+    ],
+)
+def test_staged_mapping_failure_precedes_hostile_normalization(
+    path: str,
+    replacement: object,
+    error_type: type[HermesProtocolError],
+) -> None:
+    """Safe staged classifications do not require hostile normalization."""
+    value = _supported_capabilities()
+    value[path] = replacement
+
+    with pytest.raises(error_type) as caught:
+        validate_capabilities(_HostileIterationMapping(value))
+    assert type(caught.value) is error_type
+
+
+def test_hostile_mapping_normalization_is_a_scrubbed_protocol_error() -> None:
+    """A post-stage normalization exception reduces to safe generic protocol."""
+    rejected = _HostileIterationMapping(_supported_capabilities())
+
+    error = _assert_sanitized_protocol_failure(rejected)
+
+    assert type(error) is HermesProtocolError
+    assert _HOSTILE_ITERATION_CANARY not in "".join(traceback.format_exception(error))
+    _assert_package_traceback_is_scrubbed(
+        error,
+        canaries=(_HOSTILE_ITERATION_CANARY,),
+        forbidden_objects=(rejected,),
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement", "error_type"),
+    [
+        ("platform", "identity-traceback-canary", HermesIdentityError),
+        (
+            "features",
+            {"chat_completions": "capability-traceback-canary"},
+            HermesCapabilityError,
+        ),
+    ],
+)
+def test_invalid_capability_context_and_cause_exclude_canary_values(
+    path: str,
+    replacement: object,
+    error_type: type[HermesProtocolError],
+) -> None:
+    """Pydantic details and raw invalid values never escape validation."""
+    canary = (
+        "identity-traceback-canary"
+        if path == "platform"
+        else "capability-traceback-canary"
+    )
+    value = _supported_capabilities()
+    value[path] = replacement
+
+    with pytest.raises(error_type) as caught:
+        validate_capabilities(value)
+    error = caught.value
+    assert type(error) is error_type
+    assert isinstance(error, HermesProtocolError)
+    assert error.category is FailureCategory.PROTOCOL
+    assert error.status_code is None
+    assert error.retryable is False
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert vars(error) == {}
     public_state = " | ".join(
         (
             str(error),
             repr(error),
             repr(error.args),
             repr(vars(error)),
+            "".join(traceback.format_exception(error)),
         )
     )
     assert canary not in public_state
     assert "ValidationError" not in public_state
 
 
-def test_direct_capability_failure_scrubs_raw_input_from_traceback_frames() -> None:
+@pytest.mark.parametrize(
+    ("path", "replacement", "error_type"),
+    [
+        ("platform", "identity-traceback-canary", HermesIdentityError),
+        (
+            "features",
+            {"chat_completions": "capability-traceback-canary"},
+            HermesCapabilityError,
+        ),
+    ],
+)
+def test_direct_capability_failure_scrubs_raw_input_from_traceback_frames(
+    path: str,
+    replacement: object,
+    error_type: type[HermesProtocolError],
+) -> None:
     """Direct validation failures retain no rejected mapping or nested canary."""
-    canary = "direct-capability-frame-canary"
-    rejected = {"platform": canary, "nested": {"canary": canary}}
+    canary = (
+        "identity-traceback-canary"
+        if path == "platform"
+        else "capability-traceback-canary"
+    )
+    rejected = _supported_capabilities()
+    rejected[path] = replacement
 
-    error = _assert_sanitized_protocol_failure(rejected)
+    with pytest.raises(error_type) as caught:
+        validate_capabilities(rejected)
+    error = caught.value
+    assert type(error) is error_type
 
     _assert_package_traceback_is_scrubbed(
         error,
