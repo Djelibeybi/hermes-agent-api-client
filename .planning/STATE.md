@@ -1,19 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.1.0
-milestone_name: Typed Hermes API Client Baseline
-current_phase: 1.0
-status: Awaiting next milestone
-last_updated: "2026-07-16T17:28:16.567Z"
+milestone: v0.3.0
+milestone_name: Conversation Contract
+status: planning
+last_updated: "2026-07-16T17:29:50.919Z"
 last_activity: 2026-07-16
-last_activity_desc: Milestone v0.1.0 completed and archived
 progress:
-  total_phases: 1
-  completed_phases: 1
-  total_plans: 1
-  completed_plans: 1
-  percent: 100
-current_phase_name: Typed Hermes API Client
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -25,10 +22,10 @@ requirements or phases to this historical baseline.
 
 ## Current Position
 
-Phase: Milestone v0.1.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-07-16 — Milestone v0.1.0 completed and archived
+Status: Defining requirements
+Last activity: 2026-07-16 — Milestone v0.3.0 started
 
 ## Operator Next Steps
 
