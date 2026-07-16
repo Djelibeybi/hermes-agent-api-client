@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import traceback
+from itertools import product
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import pytest
@@ -16,6 +17,7 @@ from hermes_agent_api_client import (
     HermesTransportError,
     KeepaliveEvent,
     TerminalEvent,
+    TerminalFailureReason,
     TerminalOutcome,
     ToolProgressEvent,
     ToolProgressStatus,
@@ -28,6 +30,7 @@ from hermes_agent_api_client.sse import (
 )
 from tests.helpers.hermes import (
     load_golden_bytes,
+    load_golden_json,
     partition_bytes,
     raw_json_object_sse_record,
 )
@@ -37,6 +40,7 @@ if TYPE_CHECKING:
     from types import FrameType
 
 _BOOLEAN_TOKEN_COUNT: object = True
+_OMITTED = object()
 
 
 class _HasAsyncGeneratorFrame(Protocol):
@@ -271,6 +275,85 @@ def _derived_usage_record(field: str, value: object) -> bytes:
             "usage": usage,
         }
     )
+
+
+def _terminal_record(
+    *,
+    finish_reason: object = _OMITTED,
+    hermes: object = _OMITTED,
+    extra: dict[str, object] | None = None,
+) -> bytes:
+    """Build one terminal candidate while preserving field omission."""
+    choice: dict[str, object] = {"delta": {}}
+    if finish_reason is not _OMITTED:
+        choice["finish_reason"] = finish_reason
+    document: dict[str, object] = {"choices": [choice]}
+    if hermes is not _OMITTED:
+        document["hermes"] = hermes
+    if extra is not None:
+        document.update(extra)
+    return _data_record(document)
+
+
+def _terminal_metadata(
+    *,
+    completed: object = _OMITTED,
+    failed: object = _OMITTED,
+    partial: object = _OMITTED,
+    error_code: object = _OMITTED,
+) -> dict[str, object]:
+    """Build lifecycle metadata while keeping absent distinct from null."""
+    values = {
+        "completed": completed,
+        "failed": failed,
+        "partial": partial,
+        "error_code": error_code,
+    }
+    return {name: value for name, value in values.items() if value is not _OMITTED}
+
+
+_ACCEPTED_STOP_METADATA = (
+    _OMITTED,
+    *(
+        _terminal_metadata(completed=completed, failed=failed, partial=partial)
+        for completed, failed, partial in product(
+            (_OMITTED, True),
+            (_OMITTED, False),
+            (_OMITTED, False),
+        )
+    ),
+)
+_ACCEPTED_LENGTH_METADATA = (
+    _OMITTED,
+    *(
+        _terminal_metadata(
+            completed=completed,
+            failed=failed,
+            partial=partial,
+            error_code=error_code,
+        )
+        for completed, failed, partial, error_code in product(
+            (_OMITTED, False),
+            (_OMITTED, False),
+            (_OMITTED, True),
+            (_OMITTED, "output_truncated"),
+        )
+    ),
+)
+_ACCEPTED_ERROR_METADATA = tuple(
+    _terminal_metadata(
+        completed=completed,
+        failed=failed,
+        partial=partial,
+        error_code=error_code,
+    )
+    for completed, failed, partial, error_code in product(
+        (_OMITTED, False),
+        (_OMITTED, True),
+        (False, True),
+        (_OMITTED, "agent_error", "future_safe_error"),
+    )
+)
 
 
 @pytest.mark.asyncio
@@ -894,24 +977,401 @@ async def test_additive_application_fields_are_ignored_at_every_wire_level() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("hermes", _ACCEPTED_STOP_METADATA)
+async def test_stop_terminal_accepts_only_the_total_success_rows(
+    hermes: object,
+) -> None:
+    """Every D-01 accepted omission/boolean row has one exact public value."""
+    record = _terminal_record(finish_reason="stop", hermes=hermes)
+
+    assert await _decode((record + _canonical_records()[6],)) == (
+        TerminalEvent(
+            outcome=TerminalOutcome.SUCCESS,
+            partial=False,
+            failure_reason=None,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hermes", _ACCEPTED_LENGTH_METADATA)
+async def test_length_terminal_accepts_only_the_total_truncation_rows(
+    hermes: object,
+) -> None:
+    """Every D-02 accepted omission/boolean/code row maps identically."""
+    record = _terminal_record(finish_reason="length", hermes=hermes)
+
+    assert await _decode((record + _canonical_records()[6],)) == (
+        TerminalEvent(
+            outcome=TerminalOutcome.LENGTH,
+            partial=True,
+            failure_reason=TerminalFailureReason.OUTPUT_TRUNCATED,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hermes", _ACCEPTED_ERROR_METADATA)
+async def test_error_terminal_accepts_only_the_total_upstream_error_rows(
+    hermes: object,
+) -> None:
+    """Every D-03 accepted row preserves partial and closes public reasons."""
+    assert isinstance(hermes, dict)
+    metadata = cast("dict[str, object]", hermes)
+    code = metadata.get("error_code")
+    expected_reason = (
+        TerminalFailureReason.UNKNOWN
+        if code == "future_safe_error"
+        else TerminalFailureReason.AGENT_ERROR
+    )
+    record = _terminal_record(finish_reason="error", hermes=metadata)
+
+    assert await _decode((record + _canonical_records()[6],)) == (
+        TerminalEvent(
+            outcome=TerminalOutcome.UPSTREAM_ERROR,
+            partial=cast("bool", metadata["partial"]),
+            failure_reason=expected_reason,
+        ),
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("finish_reason", "outcome"),
+    ("finish_reason", "hermes"),
     [
-        ("length", TerminalOutcome.LENGTH),
-        ("error", TerminalOutcome.UPSTREAM_ERROR),
+        ("stop", _terminal_metadata(completed=False)),
+        ("stop", _terminal_metadata(failed=True)),
+        ("stop", _terminal_metadata(partial=True)),
+        ("stop", _terminal_metadata(error_code="output_truncated")),
+        ("length", _terminal_metadata(completed=True)),
+        ("length", _terminal_metadata(failed=True)),
+        ("length", _terminal_metadata(partial=False)),
+        ("length", _terminal_metadata(error_code="agent_error")),
+        ("error", _terminal_metadata(partial=False, completed=True)),
+        ("error", _terminal_metadata(partial=False, failed=False)),
+    ],
+    ids=[
+        "stop-completed-false",
+        "stop-failed-true",
+        "stop-partial-true",
+        "stop-code-present",
+        "length-completed-true",
+        "length-failed-true",
+        "length-partial-false",
+        "length-wrong-code",
+        "error-completed-true",
+        "error-failed-false",
     ],
 )
-async def test_non_success_finish_reasons_are_typed_terminals(
+async def test_contradictory_terminal_rows_fail_without_precedence(
     finish_reason: str,
-    outcome: TerminalOutcome,
+    hermes: dict[str, object],
 ) -> None:
-    """Exact-version abnormal finish plus DONE retains the abnormal outcome."""
-    record = _derived_finish_record(
-        finish_reason=finish_reason,
-        include_usage=False,
+    """Every field-level contradiction is rejected rather than normalized."""
+    with pytest.raises(HermesProtocolError):
+        await _decode(
+            (
+                _terminal_record(finish_reason=finish_reason, hermes=hermes)
+                + _canonical_records()[6],
+            )
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason", ["stop", "length", "error"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("completed", None),
+        ("completed", 1),
+        ("completed", "true"),
+        ("failed", None),
+        ("failed", 0),
+        ("failed", "false"),
+        ("partial", None),
+        ("partial", 1),
+        ("partial", "true"),
+        ("error_code", None),
+        ("error_code", ""),
+        ("error_code", "x" * 257),
+        ("error_code", "contains space"),
+        ("error_code", 7),
+    ],
+)
+async def test_present_terminal_metadata_requires_exact_types_and_bounds(
+    finish_reason: str,
+    field: str,
+    value: object,
+) -> None:
+    """Nulls, coercible lookalikes, and unsafe codes fail for every finish."""
+    metadata = _terminal_metadata(
+        partial=False if finish_reason == "error" else _OMITTED
     )
+    metadata[field] = value
+
+    with pytest.raises(HermesProtocolError):
+        await _decode(
+            (
+                _terminal_record(finish_reason=finish_reason, hermes=metadata)
+                + _canonical_records()[6],
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_error_requires_root_hermes_and_present_exact_partial() -> None:
+    """D-10 rejects both a missing root and an omitted error partial flag."""
+    invalid_metadata: tuple[object, ...] = (_OMITTED, {})
+    for hermes in invalid_metadata:
+        with pytest.raises(HermesProtocolError):
+            await _decode(
+                (
+                    _terminal_record(finish_reason="error", hermes=hermes)
+                    + _canonical_records()[6],
+                )
+            )
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_omission_differs_from_explicit_null() -> None:
+    """A missing choice member fails while explicit null remains nonterminal."""
+    missing = _terminal_record()
+    with pytest.raises(HermesProtocolError):
+        await _decode((missing + _canonical_records()[6],))
+
+    explicit_null = _terminal_record(finish_reason=None)
+    assert await _decode((explicit_null + _canonical_records()[6],)) == (
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field",
+    ["completed", "failed", "partial", "error_code"],
+)
+@pytest.mark.parametrize("conflicting", [False, True], ids=["same", "conflicting"])
+async def test_duplicate_approved_terminal_members_fail_before_collapse(
+    field: str,
+    conflicting: object,
+) -> None:
+    """Repeated lifecycle members fail even when their JSON values agree."""
+    assert isinstance(conflicting, bool)
+    base = {
+        "completed": "false",
+        "failed": "true",
+        "partial": "false",
+        "error_code": '"agent_error"',
+    }
+    alternate = {
+        "completed": "true",
+        "failed": "false",
+        "partial": "true",
+        "error_code": '"future_safe_error"',
+    }
+    duplicate = alternate[field] if conflicting else base[field]
+    hermes_json = (
+        "{"
+        + ",".join(
+            f"{json.dumps(name)}:{value}"
+            for name, value in (*base.items(), (field, duplicate))
+        )
+        + "}"
+    )
+    record = raw_json_object_sse_record(
+        (
+            (
+                "choices",
+                '[{"delta":{},"finish_reason":"error"}]',
+            ),
+            ("hermes", hermes_json),
+        )
+    )
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((record + _canonical_records()[6],))
+
+
+@pytest.mark.asyncio
+async def test_terminal_metadata_is_root_scoped_and_additive_data_is_discarded() -> (
+    None
+):
+    """Aliases outside root and duplicate members in ignored objects are inert."""
+    record = raw_json_object_sse_record(
+        (
+            (
+                "choices",
+                '[{"delta":{},"finish_reason":"length",'
+                '"partial":false,"error_code":"agent_error"}]',
+            ),
+            (
+                "hermes",
+                '{"completed":false,"failed":false,"partial":true,'
+                '"error_code":"output_truncated",'
+                '"raw":{"partial":false,"partial":true},'
+                '"error":{"message":"ignored","message":"still-ignored"}}',
+            ),
+            ("completed", "true"),
+            ("failed", "true"),
+            ("partial", "false"),
+            ("error_code", '"agent_error"'),
+        )
+    )
+
+    assert await _decode((record + _canonical_records()[6],)) == (
+        TerminalEvent(
+            outcome=TerminalOutcome.LENGTH,
+            partial=True,
+            failure_reason=TerminalFailureReason.OUTPUT_TRUNCATED,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bytewise", [False, True], ids=["whole", "bytewise"])
+@pytest.mark.parametrize(
+    ("fixture", "expected"),
+    [
+        (
+            "terminal_length.sse",
+            (
+                UsageEvent(input_tokens=8, output_tokens=4, total_tokens=12),
+                TerminalEvent(
+                    outcome=TerminalOutcome.LENGTH,
+                    partial=True,
+                    failure_reason=TerminalFailureReason.OUTPUT_TRUNCATED,
+                ),
+            ),
+        ),
+        (
+            "terminal_agent_error.sse",
+            (
+                UsageEvent(input_tokens=8, output_tokens=2, total_tokens=10),
+                TerminalEvent(
+                    outcome=TerminalOutcome.UPSTREAM_ERROR,
+                    partial=False,
+                    failure_reason=TerminalFailureReason.AGENT_ERROR,
+                ),
+            ),
+        ),
+    ],
+)
+async def test_terminal_evidence_fixtures_map_to_exact_safe_public_events(
+    fixture: str,
+    expected: tuple[object, ...],
+    bytewise: object,
+) -> None:
+    """Immutable tag-shaped terminal evidence decodes identically by chunks."""
+    assert isinstance(bytewise, bool)
+    payload = load_golden_bytes(f"chat_completions/{fixture}")
+    parts = partition_bytes(payload) if bytewise else (payload,)
+
+    assert await _decode(parts) == expected
+
+
+@pytest.mark.asyncio
+async def test_tagged_task_exception_contradiction_fails_without_public_prefix() -> (
+    None
+):
+    """The canonical completed/failed contradiction cannot yield usage or terminal."""
+    payload = load_golden_bytes(
+        "chat_completions/terminal_task_exception_contradiction.sse"
+    )
+
+    assert await _decode_prefix_before_failure((payload,)) == ()
+
+
+@pytest.mark.asyncio
+async def test_design_terminal_matrix_is_executable_contract_evidence() -> None:
+    """Every immutable design row produces its declared event or rejection."""
+    matrix = load_golden_json("chat_completions/terminal_design_matrix.json")
+    cases = cast("list[dict[str, Any]]", matrix["cases"])
     done = _canonical_records()[6]
-    assert await _decode((record + done,)) == (TerminalEvent(outcome=outcome),)
+    for case in cases:
+        wire = cast("dict[str, object]", case["wire"])
+        expected = cast("dict[str, Any]", case["expected"])
+        record = _terminal_record(
+            finish_reason=wire["finish_reason"],
+            hermes=wire.get("hermes", _OMITTED),
+        )
+        if expected["disposition"] == "reject":
+            with pytest.raises(HermesProtocolError):
+                await _decode((record + done,))
+            continue
+        public = cast("dict[str, object]", expected["public_event"])
+        assert await _decode((record + done,)) == (
+            TerminalEvent(
+                outcome=TerminalOutcome(cast("str", public["outcome"])),
+                partial=cast("bool", public["partial"]),
+                failure_reason=(
+                    None
+                    if public["failure_reason"] is None
+                    else TerminalFailureReason(cast("str", public["failure_reason"]))
+                ),
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_raw_terminal_errors_and_unknown_codes_are_never_retained() -> None:
+    """Accepted and rejected terminal records expose only closed safe facts."""
+    unknown_code = "terminal-future-private-code-canary"
+    accepted = _terminal_record(
+        finish_reason="error",
+        hermes={
+            "partial": True,
+            "error_code": unknown_code,
+            "error": {"message": "accepted-raw-terminal-error-canary"},
+        },
+        extra={
+            "error": {
+                "message": "accepted-root-terminal-error-canary",
+                "type": "AcceptedPrivateExceptionCanary",
+            }
+        },
+    )
+    accepted_stream = cast(
+        "AsyncGenerator[object]",
+        async_decode_hermes_sse(_chunks((accepted + _canonical_records()[6],))),
+    )
+    event = await anext(accepted_stream)
+    assert event == TerminalEvent(
+        outcome=TerminalOutcome.UPSTREAM_ERROR,
+        partial=True,
+        failure_reason=TerminalFailureReason.UNKNOWN,
+    )
+    assert unknown_code not in repr(event)
+    with pytest.raises(StopAsyncIteration):
+        await anext(accepted_stream)
+    assert cast("_HasAsyncGeneratorFrame", accepted_stream).ag_frame is None
+
+    rejected_canaries = (
+        "rejected-root-terminal-error-canary",
+        "rejected-hermes-terminal-error-canary",
+        "RejectedPrivateExceptionCanary",
+    )
+    rejected = _terminal_record(
+        finish_reason="error",
+        hermes={
+            "completed": True,
+            "failed": True,
+            "partial": False,
+            "error": {"message": rejected_canaries[1]},
+        },
+        extra={
+            "error": {
+                "message": rejected_canaries[0],
+                "type": rejected_canaries[2],
+            }
+        },
+    )
+    with pytest.raises(HermesProtocolError) as caught:
+        await _decode((rejected + _canonical_records()[6],))
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=rejected_canaries,
+        forbidden_objects=(rejected,),
+    )
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ from hermes_agent_api_client.models import (
     HermesEvent,
     KeepaliveEvent,
     TerminalEvent,
+    TerminalFailureReason,
     TerminalOutcome,
 )
 from hermes_agent_api_client.protocol import (
@@ -195,6 +196,27 @@ def _successful_sse(text: str = "hello") -> bytes:
         separators=(",", ":"),
     ).encode()
     return b"data: " + chunk + b"\n\ndata: [DONE]\n\n"
+
+
+def _length_sse(text: str = "hello") -> bytes:
+    """Build text followed by one enriched length terminal and DONE."""
+    content = json.dumps(
+        {"choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]},
+        separators=(",", ":"),
+    ).encode()
+    terminal = json.dumps(
+        {
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "length"}],
+            "hermes": {
+                "completed": False,
+                "failed": False,
+                "partial": True,
+                "error_code": "output_truncated",
+            },
+        },
+        separators=(",", ":"),
+    ).encode()
+    return b"data: " + content + b"\n\ndata: " + terminal + b"\n\ndata: [DONE]\n\n"
 
 
 async def _probe(
@@ -905,7 +927,7 @@ async def test_stream_timeout_survives_one_virtual_keepalive_interval() -> None:
 @pytest.mark.asyncio
 async def test_terminal_is_delivered_only_after_response_cleanup() -> None:
     """Terminal delivery proves the response scope has already closed."""
-    stream = TrackingAsyncByteStream((_successful_sse("ordered text"),))
+    stream = TrackingAsyncByteStream((_length_sse("ordered text"),))
     response: httpx.Response | None = None
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -926,7 +948,11 @@ async def test_terminal_is_delivered_only_after_response_cleanup() -> None:
     try:
         assert await anext(generator) == AssistantDeltaEvent(text="ordered text")
         assert stream.closed is False
-        assert await anext(generator) == TerminalEvent(outcome=TerminalOutcome.SUCCESS)
+        assert await anext(generator) == TerminalEvent(
+            outcome=TerminalOutcome.LENGTH,
+            partial=True,
+            failure_reason=TerminalFailureReason.OUTPUT_TRUNCATED,
+        )
         assert stream.closed is True
         assert response is not None
         assert response.is_closed is True
