@@ -28,12 +28,28 @@ policy remain owned by `hermes-conversation`.
 **Depends on:** Phase 1 (completed historical baseline)
 **Requirements:** TOOL-01, TOOL-02, TOOL-03, TOOL-04, TERM-01, TERM-02, TERM-03, TERM-04, TERM-05, TERM-06, TERM-07
 **Success Criteria** (what must be TRUE):
+
   1. Consumers can import the immutable tool status/event types and receive ordered `running` and `completed` events with correlated 1-256 character call IDs and names, including repeated records that preserve unmatched-call detectability after interruption.
   2. Missing, malformed, unknown, over-256-character, or duplicate approved tool lifecycle keys fail as `HermesProtocolError`, while emoji, labels, arguments, results, additive fields, and raw tool payloads never enter public state.
   3. Consumers can import the terminal failure-reason type and receive exact normal-stop, truncation, agent-error, and bounded unknown-safe-code mappings with the correct outcome and partial state.
   4. Every duplicate approved terminal key or contradictory `completed`, `failed`, `partial`, `error_code`, and `finish_reason` combination fails as `HermesProtocolError` instead of being resolved by precedence.
   5. Terminal events remain withheld until the response and suffix validate and cleanup succeeds; raw upstream error details stay private, transport disconnects remain transport errors, and cancellation produces no synthetic terminal event.
-**Plans:** TBD
+
+**Plans:** 4 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 02-01-PLAN.md — Define the strict immutable public tool-progress and terminal vocabulary.
+- [ ] 02-02-PLAN.md — Freeze versioned tool and terminal evidence with truthful provenance.
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 02-03-PLAN.md — Decode duplicate-aware correlated tool-progress facts in order.
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 02-04-PLAN.md — Map strict safe terminal metadata through the delayed-delivery gate.
 
 ### Phase 3: Session Header Safety
 
@@ -41,11 +57,13 @@ policy remain owned by `hermes-conversation`.
 **Depends on:** Phase 2
 **Requirements:** SESS-01, SESS-02, SESS-03, SESS-04, SESS-05, HTTP-02
 **Success Criteria** (what must be TRUE):
+
   1. Consumers can independently omit or provide `session_id` and `session_key`, with non-`None` values mapped only to their exact Hermes headers and no arbitrary-header API.
   2. Only exact built-in strings of 1-256 visible ASCII characters (`0x21..0x7e`) are accepted, path-shaped session IDs are rejected, and invalid pairs fail atomically before dispatch as safe non-retryable local input errors.
   3. Concurrent streams use fresh headers and leave the request mapping, bound authorization headers, and every other stream's session values unchanged.
   4. Session canaries are absent from public failures, text representations, traceback chains, and retained generator locals after rejection, completion, early close, or cancellation.
   5. Closing or cancelling a stream closes its response but never an injected caller-owned HTTP client, and `asyncio.CancelledError` propagates after cleanup.
+
 **Plans:** TBD
 
 ### Phase 4: Contract and Distribution Verification
@@ -54,10 +72,12 @@ policy remain owned by `hermes-conversation`.
 **Depends on:** Phase 3
 **Requirements:** SECU-02, VERI-02, PKG-02, DEPS-01
 **Success Criteria** (what must be TRUE):
+
   1. Canary and lifecycle matrices prove no session value, raw tool data, or raw terminal error detail survives in public values, failures, traceback chains, or retained generator state across normal and abnormal exits.
   2. The full session, duplicate/contradiction, ordered-correlation, unmatched-call, cancellation, cleanup-precedence, and v0.1.0 regression matrix passes with 100% branch coverage.
   3. Package-root imports and `HermesEvent` expose the complete v0.3.0 contract from source, wheel, and sdist with `py.typed`, strict basedpyright and `--verifytypes`, Ruff, and standalone distribution verification green.
   4. The lockfile uses the latest compatible dependency versions verified at execution time, with no new or broadened conversation-contract runtime dependency in `pyproject.toml`.
+
 **Plans:** TBD
 
 ## Progress
