@@ -15,7 +15,9 @@ from .protocol import (
     HermesHttpStatusError,
     HermesProtocolError,
     HermesTransportError,
-    validate_capabilities,
+    _CapabilityFailureKind,  # pyright: ignore[reportPrivateUsage]
+    _parse_capabilities,  # pyright: ignore[reportPrivateUsage]
+    _raise_capability_failure,  # pyright: ignore[reportPrivateUsage]
 )
 from .sse import async_decode_hermes_sse
 
@@ -212,7 +214,7 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
     response: httpx.Response | None = None
     cancellation: asyncio.CancelledError | None = None
     status_code: int | None = None
-    protocol_failed = False
+    capability_failure: _CapabilityFailureKind | None = None
     read_transport_failed = False
     cleanup_failed = False
     primary_outcome = False
@@ -248,17 +250,21 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
                                 read_transport_failed = True
                                 primary_outcome = True
                     if not valid_length:
-                        protocol_failed = True
+                        capability_failure = _CapabilityFailureKind.PROTOCOL
                         primary_outcome = True
                     elif not read_transport_failed:
-                        capabilities = _parse_capabilities_payload(bytes(payload))
-                        protocol_failed = capabilities is None
-                        primary_outcome = primary_outcome or protocol_failed
+                        capabilities, capability_failure = _parse_capabilities_payload(
+                            bytes(payload)
+                        )
+                        primary_outcome = (
+                            primary_outcome or capability_failure is not None
+                        )
             except asyncio.CancelledError as caught:
                 if not primary_outcome and response.is_closed:
-                    capabilities = _parse_capabilities_payload(bytes(payload))
-                    protocol_failed = capabilities is None
-                    primary_outcome = protocol_failed
+                    capabilities, capability_failure = _parse_capabilities_payload(
+                        bytes(payload)
+                    )
+                    primary_outcome = capability_failure is not None
                 if not primary_outcome:
                     cancellation = caught.with_traceback(None)
     except (asyncio.CancelledError, Exception):
@@ -268,9 +274,10 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
             and response is not None
             and response.is_closed
         ):
-            capabilities = _parse_capabilities_payload(bytes(payload))
-            protocol_failed = capabilities is None
-            primary_outcome = protocol_failed
+            capabilities, capability_failure = _parse_capabilities_payload(
+                bytes(payload)
+            )
+            primary_outcome = capability_failure is not None
         if cancellation is None and not primary_outcome:
             raise
     if cancellation is not None:
@@ -285,14 +292,14 @@ async def _read_capabilities_body(  # noqa: C901, PLR0912, PLR0915
         payload = bytearray()
         del http_client, endpoint, headers
         raise _status_failure(status_code)
-    if protocol_failed:
+    if capability_failure is not None:
         response = None
         chunk = b""
         payload.clear()
         payload = bytearray()
         capabilities = None
         del http_client, endpoint, headers
-        _raise_protocol_failure()
+        _raise_capability_failure(capability_failure)
     if read_transport_failed:
         response = None
         chunk = b""
@@ -320,15 +327,20 @@ def _load_json(payload: bytes) -> tuple[bool, object]:
         return (False, None)
 
 
-def _parse_capabilities_payload(payload: bytes) -> HermesCapabilities | None:
-    """Parse one bounded capability payload or return no result when invalid."""
+def _parse_capabilities_payload(
+    payload: bytes,
+) -> tuple[HermesCapabilities | None, _CapabilityFailureKind | None]:
+    """Parse one bounded capability payload into a value or safe failure kind."""
     valid_json, document = _load_json(payload)
     if not valid_json:
-        return None
-    try:
-        return validate_capabilities(document)
-    except HermesProtocolError:
-        return None
+        return (None, _CapabilityFailureKind.PROTOCOL)
+    capabilities, failure_kind = _parse_capabilities(document)
+    document = None
+    if failure_kind is not None:
+        return (None, failure_kind)
+    if capabilities is None:
+        return (None, _CapabilityFailureKind.PROTOCOL)
+    return (capabilities, None)
 
 
 async def _probe_capabilities(  # pyright: ignore[reportUnusedFunction]

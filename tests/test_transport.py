@@ -34,8 +34,10 @@ from hermes_agent_api_client.models import (
 )
 from hermes_agent_api_client.protocol import (
     HermesAuthenticationError,
+    HermesCapabilityError,
     HermesContractError,
     HermesHttpStatusError,
+    HermesIdentityError,
     HermesProtocolError,
     HermesTransportError,
     validate_capabilities,
@@ -47,6 +49,7 @@ if TYPE_CHECKING:
         AsyncGenerator,
         AsyncIterable,
         AsyncIterator,
+        Callable,
         Iterable,
         Iterator,
     )
@@ -155,6 +158,17 @@ class TrackingAsyncByteStream(httpx.AsyncByteStream):
 
 def _supported_capabilities() -> dict[str, object]:
     return load_golden_json("capabilities/supported.json")
+
+
+def _advertise_wrong_platform(document: dict[str, object]) -> None:
+    """Make one otherwise-supported document fail endpoint identity."""
+    document["platform"] = "transport-identity-canary"
+
+
+def _advertise_unsupported_chat(document: dict[str, object]) -> None:
+    """Make one otherwise-supported document fail required chat support."""
+    features = cast("dict[str, object]", document["features"])
+    features["chat_completions"] = "transport-capability-canary"
 
 
 def _capabilities_body_at_size(size: int) -> bytes:
@@ -320,6 +334,100 @@ async def test_probe_accepts_exact_byte_limit() -> None:
         assert result == validate_capabilities(_supported_capabilities())
         assert stream.closed is True
         assert client.is_closed is False
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutate", "error_type", "canary"),
+    [
+        (
+            _advertise_wrong_platform,
+            HermesIdentityError,
+            "transport-identity-canary",
+        ),
+        (
+            _advertise_unsupported_chat,
+            HermesCapabilityError,
+            "transport-capability-canary",
+        ),
+    ],
+)
+async def test_probe_propagates_typed_capability_failures_safely(
+    mutate: Callable[[dict[str, object]], None],
+    error_type: type[HermesProtocolError],
+    canary: str,
+) -> None:
+    """Typed capability failures survive response cleanup without wire state."""
+    document = _supported_capabilities()
+    mutate(document)
+    stream = TrackingAsyncByteStream((json.dumps(document).encode(),))
+    response: httpx.Response | None = None
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal response
+        response = httpx.Response(200, request=request, stream=stream)
+        return response
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        with pytest.raises(error_type) as caught:
+            await _probe(client)
+        assert type(caught.value) is error_type
+        assert response is not None
+        assert response.is_closed
+        assert stream.closed
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        assert caught.value.args == (
+            "Hermes protocol failure (status=none, retryable=false)",
+        )
+        assert canary not in "".join(traceback.format_exception(caught.value))
+        _assert_traceback_locals_are_safe(
+            caught.value,
+            canaries=(canary, "capability-bearer"),
+            forbidden_objects=(response, document),
+        )
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_probe_maps_empty_capability_parser_outcome_to_safe_protocol() -> None:
+    """A defensive empty parser outcome remains a sanitized protocol failure."""
+    document = _supported_capabilities()
+    document["model"] = "empty-parser-outcome-canary"
+    stream = TrackingAsyncByteStream((json.dumps(document).encode(),))
+    response: httpx.Response | None = None
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal response
+        response = httpx.Response(200, request=request, stream=stream)
+        return response
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        with (
+            patch(
+                "hermes_agent_api_client.client._parse_capabilities",
+                return_value=(None, None),
+            ),
+            pytest.raises(HermesProtocolError) as caught,
+        ):
+            await _probe(client)
+
+        assert type(caught.value) is HermesProtocolError
+        assert response is not None
+        assert response.is_closed
+        assert stream.closed
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        _assert_traceback_locals_are_safe(
+            caught.value,
+            canaries=("empty-parser-outcome-canary", "capability-bearer"),
+            forbidden_objects=(response, document),
+        )
     finally:
         await client.aclose()
 

@@ -29,6 +29,10 @@ from hermes_agent_api_client.client import (
     _MAX_CAPABILITIES_BYTES,  # pyright: ignore[reportPrivateUsage]
 )
 from hermes_agent_api_client.models import FailureCategory
+from hermes_agent_api_client.protocol import (
+    HermesCapabilityError,
+    HermesIdentityError,
+)
 from hermes_agent_api_client.sse import (
     MAX_EVENT_DATA_CHARS,  # pyright: ignore[reportPrivateUsage]
 )
@@ -337,6 +341,17 @@ def _successful_transport(
         )
 
     return respond
+
+
+def _advertise_wrong_platform(document: dict[str, object]) -> None:
+    """Make one otherwise-supported document fail endpoint identity."""
+    document["platform"] = "public-identity-body-canary"
+
+
+def _advertise_unsupported_chat(document: dict[str, object]) -> None:
+    """Make one otherwise-supported document fail required chat support."""
+    features = cast("dict[str, object]", document["features"])
+    features["chat_completions"] = "public-capability-body-canary"
 
 
 @pytest.mark.asyncio
@@ -911,7 +926,11 @@ async def test_capability_status_failure_precedes_response_close_cancellation() 
     [
         (b"capability-malformed-json-canary", "capability-malformed-json-canary"),
         (
-            b'{"platform":"capability-invalid-shape-canary"}',
+            b'{"object":"hermes.api_server.capabilities",'
+            b'"platform":"hermes-agent","model":"hermes-agent",'
+            b'"auth":"capability-invalid-shape-canary",'
+            b'"features":{"chat_completions":true,'
+            b'"chat_completions_streaming":true}}',
             "capability-invalid-shape-canary",
         ),
     ],
@@ -998,7 +1017,11 @@ async def test_capability_protocol_failure_precedes_response_close_failure(
             "capability-malformed-cancellation-body-canary",
         ),
         (
-            b'{"platform":"capability-invalid-cancellation-shape-canary"}',
+            b'{"object":"hermes.api_server.capabilities",'
+            b'"platform":"hermes-agent","model":"hermes-agent",'
+            b'"auth":"capability-invalid-cancellation-shape-canary",'
+            b'"features":{"chat_completions":true,'
+            b'"chat_completions_streaming":true}}',
             "capability-invalid-cancellation-shape-canary",
         ),
     ],
@@ -2240,6 +2263,7 @@ async def test_bound_endpoint_and_auth_are_reused_across_operations() -> None:
 
         assert isinstance(events[-1], TerminalEvent)
         assert capabilities.object == "hermes.api_server.capabilities"
+        assert capabilities.model == "hermes-agent"
         assert [request.url.path for request in requests] == [
             "/private-base/v1/chat/completions",
             "/private-base/v1/capabilities",
@@ -2255,6 +2279,72 @@ async def test_bound_endpoint_and_auth_are_reused_across_operations() -> None:
             "messages": (),
             "stream": True,
         }
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mutate", "error_type", "body_canary"),
+    [
+        (
+            _advertise_wrong_platform,
+            HermesIdentityError,
+            "public-identity-body-canary",
+        ),
+        (
+            _advertise_unsupported_chat,
+            HermesCapabilityError,
+            "public-capability-body-canary",
+        ),
+    ],
+)
+async def test_public_probe_propagates_typed_capability_failures_safely(
+    mutate: Callable[[dict[str, object]], None],
+    error_type: type[HermesProtocolError],
+    body_canary: str,
+) -> None:
+    """Public probes preserve exact typed failures after bound-state cleanup."""
+    document = load_golden_json("capabilities/supported.json")
+    mutate(document)
+    response_stream = TrackingAsyncByteStream((json.dumps(document).encode(),))
+    response: httpx.Response | None = None
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal response
+        response = httpx.Response(200, request=request, stream=response_stream)
+        return response
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(error_type) as caught:
+                await client.probe_capabilities()
+
+        assert type(caught.value) is error_type
+        assert response is not None
+        assert response.is_closed
+        assert response_stream.closed
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        assert caught.value.args == (
+            "Hermes protocol failure (status=none, retryable=false)",
+        )
+        _assert_no_sensitive_traceback_references(
+            caught.value,
+            canaries=(_BASE_URL_CANARY, _BEARER_KEY_CANARY, body_canary),
+            forbidden_objects=(
+                client,
+                injected_http_client,
+                response,
+                document,
+            ),
+        )
     finally:
         await injected_http_client.aclose()
 
