@@ -1,7 +1,7 @@
 # Hermes Capability Identity Contract Design
 
-**Date:** 2026-07-16  
-**Status:** Approved for implementation  
+**Date:** 2026-07-16\
+**Status:** Approved for implementation\
 **Repository:** `hermes-agent-api-client`
 
 ## Purpose
