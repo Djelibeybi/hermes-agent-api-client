@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 from typing import TYPE_CHECKING, Any, cast, get_args
@@ -27,11 +28,16 @@ from hermes_agent_api_client import (
     UsageEvent,
 )
 from hermes_agent_api_client.models import FailureCategory
-from hermes_agent_api_client.protocol import validate_capabilities
+from hermes_agent_api_client.protocol import (
+    HermesCapabilityError,
+    HermesIdentityError,
+    validate_capabilities,
+)
 from tests.helpers.hermes import (
     add_json_key,
     load_golden_bytes,
     load_golden_json,
+    remove_json_key,
     reorder_json_keys,
 )
 
@@ -293,31 +299,178 @@ def test_missing_required_fields_are_safe_protocol_failures(
     _assert_sanitized_protocol_failure(value)
 
 
-def test_invalid_capability_context_and_cause_exclude_canary_values() -> None:
-    """Pydantic details and raw invalid values never escape validation."""
-    canary = "Bearer sk-capability-validation-canary"
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("object",), None),
+        (("object",), "not.hermes"),
+        (("platform",), None),
+        (("platform",), "not-hermes-agent"),
+    ],
+)
+def test_invalid_identity_maps_to_identity_error(
+    path: tuple[str, ...], replacement: object
+) -> None:
+    """Invalid Hermes discriminators have one exact identity failure type."""
     value = _supported_capabilities()
-    value["platform"] = canary
+    value[path[0]] = replacement
+    with pytest.raises(HermesIdentityError) as caught:
+        validate_capabilities(value)
+    assert type(caught.value) is HermesIdentityError
+    assert isinstance(caught.value, HermesProtocolError)
 
-    error = _assert_sanitized_protocol_failure(value)
+
+@pytest.mark.parametrize(
+    "features",
+    [None, {}, {"chat_completions": False}, {"chat_completions": 1}],
+)
+def test_required_chat_support_maps_to_capability_error(features: object) -> None:
+    """Missing or invalid Chat Completions support is a capability failure."""
+    value = _supported_capabilities()
+    value["features"] = features
+    with pytest.raises(HermesCapabilityError) as caught:
+        validate_capabilities(value)
+    assert type(caught.value) is HermesCapabilityError
+    assert isinstance(caught.value, HermesProtocolError)
+
+
+def test_identity_failure_precedes_capability_failure() -> None:
+    """Identity classification wins when both validation stages are invalid."""
+    value = _supported_capabilities()
+    value["object"] = "identity-canary"
+    value["features"] = None
+    with pytest.raises(HermesIdentityError):
+        validate_capabilities(value)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("auth", "type"), "none"),
+        (("auth", "required"), False),
+        (("features", "chat_completions_streaming"), False),
+        (("model",), ""),
+    ],
+)
+def test_other_valid_identity_failures_remain_generic_protocol_errors(
+    path: tuple[str, ...], replacement: object
+) -> None:
+    """Failures after identity and required-chat checks remain generic."""
+    value = _supported_capabilities()
+    target = value
+    for key in path[:-1]:
+        target = cast("dict[str, Any]", target[key])
+    target[path[-1]] = replacement
+    with pytest.raises(HermesProtocolError) as caught:
+        validate_capabilities(value)
+    assert type(caught.value) is HermesProtocolError
+
+
+@pytest.mark.parametrize("path", [("object",), ("platform",)])
+def test_missing_identity_discriminator_maps_to_identity_error(
+    path: tuple[str, ...],
+) -> None:
+    """Missing identity discriminators use the exact identity failure type."""
+    value = remove_json_key(_supported_capabilities(), path)
+    with pytest.raises(HermesIdentityError) as caught:
+        validate_capabilities(value)
+    assert type(caught.value) is HermesIdentityError
+
+
+def test_missing_chat_completions_maps_to_capability_error() -> None:
+    """A missing required Chat Completions key is a capability failure."""
+    value = remove_json_key(_supported_capabilities(), ("features", "chat_completions"))
+    with pytest.raises(HermesCapabilityError) as caught:
+        validate_capabilities(value)
+    assert type(caught.value) is HermesCapabilityError
+
+
+def test_missing_identity_precedes_missing_chat_completions() -> None:
+    """A missing discriminator wins over a missing required capability."""
+    value = remove_json_key(_supported_capabilities(), ("platform",))
+    value = remove_json_key(value, ("features", "chat_completions"))
+    with pytest.raises(HermesIdentityError):
+        validate_capabilities(value)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement", "error_type"),
+    [
+        ("platform", "identity-traceback-canary", HermesIdentityError),
+        (
+            "features",
+            {"chat_completions": "capability-traceback-canary"},
+            HermesCapabilityError,
+        ),
+    ],
+)
+def test_invalid_capability_context_and_cause_exclude_canary_values(
+    path: str,
+    replacement: object,
+    error_type: type[HermesProtocolError],
+) -> None:
+    """Pydantic details and raw invalid values never escape validation."""
+    canary = (
+        "identity-traceback-canary"
+        if path == "platform"
+        else "capability-traceback-canary"
+    )
+    value = _supported_capabilities()
+    value[path] = replacement
+
+    with pytest.raises(error_type) as caught:
+        validate_capabilities(value)
+    error = caught.value
+    assert type(error) is error_type
+    assert isinstance(error, HermesProtocolError)
+    assert error.category is FailureCategory.PROTOCOL
+    assert error.status_code is None
+    assert error.retryable is False
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert vars(error) == {}
     public_state = " | ".join(
         (
             str(error),
             repr(error),
             repr(error.args),
             repr(vars(error)),
+            "".join(traceback.format_exception(error)),
         )
     )
     assert canary not in public_state
     assert "ValidationError" not in public_state
 
 
-def test_direct_capability_failure_scrubs_raw_input_from_traceback_frames() -> None:
+@pytest.mark.parametrize(
+    ("path", "replacement", "error_type"),
+    [
+        ("platform", "identity-traceback-canary", HermesIdentityError),
+        (
+            "features",
+            {"chat_completions": "capability-traceback-canary"},
+            HermesCapabilityError,
+        ),
+    ],
+)
+def test_direct_capability_failure_scrubs_raw_input_from_traceback_frames(
+    path: str,
+    replacement: object,
+    error_type: type[HermesProtocolError],
+) -> None:
     """Direct validation failures retain no rejected mapping or nested canary."""
-    canary = "direct-capability-frame-canary"
-    rejected = {"platform": canary, "nested": {"canary": canary}}
+    canary = (
+        "identity-traceback-canary"
+        if path == "platform"
+        else "capability-traceback-canary"
+    )
+    rejected = _supported_capabilities()
+    rejected[path] = replacement
 
-    error = _assert_sanitized_protocol_failure(rejected)
+    with pytest.raises(error_type) as caught:
+        validate_capabilities(rejected)
+    error = caught.value
+    assert type(error) is error_type
 
     _assert_package_traceback_is_scrubbed(
         error,

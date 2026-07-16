@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, ClassVar, Literal, Never
+from enum import StrEnum
+from typing import Annotated, ClassVar, Literal, Never, cast
 
 from pydantic import (
     BaseModel,
@@ -43,11 +44,6 @@ def _validate_transient(transient: object) -> None:
     """Require an explicit real boolean transport classification."""
     if not isinstance(transient, bool):
         raise TypeError
-
-
-def _raise_protocol_failure() -> Never:
-    """Raise a fresh protocol failure from a raw-input-free frame."""
-    raise HermesProtocolError
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -96,6 +92,33 @@ class HermesProtocolError(HermesContractError):
             status_code=None,
             retryable=False,
         )
+
+
+class HermesIdentityError(HermesProtocolError):
+    """A capability document does not identify a Hermes Agent endpoint."""
+
+    __slots__ = ()
+
+
+class HermesCapabilityError(HermesProtocolError):
+    """A Hermes endpoint lacks required Chat Completions support."""
+
+    __slots__ = ()
+
+
+class _CapabilityFailureKind(StrEnum):
+    IDENTITY = "identity"
+    CAPABILITY = "capability"
+    PROTOCOL = "protocol"
+
+
+def _raise_capability_failure(kind: _CapabilityFailureKind) -> Never:
+    """Raise the exact safe capability failure from an input-free frame."""
+    if kind is _CapabilityFailureKind.IDENTITY:
+        raise HermesIdentityError
+    if kind is _CapabilityFailureKind.CAPABILITY:
+        raise HermesCapabilityError
+    raise HermesProtocolError
 
 
 class HermesAuthenticationError(HermesContractError):
@@ -231,12 +254,47 @@ class _ChatChunkWire(_WireModel):
     usage: _UsageWire | None = None
 
 
-def _parse_capabilities(value: object) -> _CapabilitiesWire | None:
-    """Parse supported wire semantics without retaining validation details."""
+def _parse_capabilities(
+    value: object,
+) -> tuple[HermesCapabilities | None, _CapabilityFailureKind | None]:
+    """Reduce capability validation into a public value or safe failure kind."""
+    if not isinstance(value, dict):
+        return (None, _CapabilityFailureKind.PROTOCOL)
+
+    document = cast("dict[object, object]", value)
+    object_value = document.get("object")
+    platform_value = document.get("platform")
+    if (
+        not isinstance(object_value, str)
+        or object_value != "hermes.api_server.capabilities"
+        or not isinstance(platform_value, str)
+        or platform_value != "hermes-agent"
+    ):
+        return (None, _CapabilityFailureKind.IDENTITY)
+
+    features = document.get("features")
+    if not isinstance(features, dict):
+        return (None, _CapabilityFailureKind.CAPABILITY)
+    feature_values = cast("dict[object, object]", features)
+    if feature_values.get("chat_completions") is not True:
+        return (None, _CapabilityFailureKind.CAPABILITY)
+
     try:
-        return _CapabilitiesWire.model_validate(value)
+        parsed = _CapabilitiesWire.model_validate(value)
     except ValidationError:
-        return None
+        return (None, _CapabilityFailureKind.PROTOCOL)
+    return (
+        HermesCapabilities(
+            object=parsed.object,
+            platform=parsed.platform,
+            model=parsed.model,
+            auth_type=parsed.auth.type,
+            auth_required=parsed.auth.required,
+            chat_completions=parsed.features.chat_completions,
+            chat_completions_streaming=parsed.features.chat_completions_streaming,
+        ),
+        None,
+    )
 
 
 def _parse_tool_progress(  # pyright: ignore[reportUnusedFunction]
@@ -261,16 +319,9 @@ def _parse_chat_chunk(  # pyright: ignore[reportUnusedFunction]
 
 def validate_capabilities(value: object) -> HermesCapabilities:
     """Validate the minimum forward-compatible Hermes capability semantics."""
-    parsed = _parse_capabilities(value)
-    if parsed is None:
+    parsed, failure_kind = _parse_capabilities(value)
+    if failure_kind is not None:
         value = None
-        _raise_protocol_failure()
-    return HermesCapabilities(
-        object=parsed.object,
-        platform=parsed.platform,
-        model=parsed.model,
-        auth_type=parsed.auth.type,
-        auth_required=parsed.auth.required,
-        chat_completions=parsed.features.chat_completions,
-        chat_completions_streaming=parsed.features.chat_completions_streaming,
-    )
+        parsed = None
+        _raise_capability_failure(failure_kind)
+    return cast("HermesCapabilities", parsed)
