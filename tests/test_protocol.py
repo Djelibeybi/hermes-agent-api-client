@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 from typing import TYPE_CHECKING, Any, cast, get_args
@@ -26,12 +28,18 @@ from hermes_agent_api_client import (
 )
 from hermes_agent_api_client.models import FailureCategory
 from hermes_agent_api_client.protocol import validate_capabilities
-from tests.helpers.hermes import add_json_key, load_golden_json, reorder_json_keys
+from tests.helpers.hermes import (
+    add_json_key,
+    load_golden_bytes,
+    load_golden_json,
+    reorder_json_keys,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
 _EVENT_RECORD_COUNT = 7
+_MODEL_MAX_LENGTH = 255
 
 
 def _supported_capabilities() -> dict[str, Any]:
@@ -103,6 +111,62 @@ def _assert_package_traceback_is_scrubbed(
                 pending.extend(cast("Iterable[object]", referenced))
 
 
+def test_capability_fixture_matches_immutable_tag_provenance() -> None:
+    """The complete captured handler bytes match their immutable provenance."""
+    payload = load_golden_bytes("capabilities/supported.json")
+    provenance = load_golden_json("provenance.json")
+    capability_entry = next(
+        entry
+        for entry in provenance["fixtures"]
+        if entry["path"] == "capabilities/supported.json"
+    )
+    assert provenance["hermes_release"] == "v2026.7.7.2"
+    assert provenance["source_commit"] == ("9de9c25f620ff7f1ce0fd5457d596052d5159596")
+    assert capability_entry["evidence_kind"] == "immutable-tag-capture"
+    assert hashlib.sha256(payload).hexdigest() == capability_entry["sha256"]
+    assert json.loads(payload)["model"] == "hermes-agent"
+
+
+def test_supported_capabilities_expose_an_immutable_model() -> None:
+    """A supported response exposes its exact model on the frozen public value."""
+    result = validate_capabilities(_supported_capabilities())
+    assert result.model == "hermes-agent"
+    with pytest.raises(ValidationError, match="Instance is frozen"):
+        result.model = "changed"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("model", ["", " ", "\t\n", 7, None, True])
+def test_invalid_model_values_are_protocol_failures(model: object) -> None:
+    """Invalid wire model values collapse into the safe protocol failure."""
+    value = _supported_capabilities()
+    value["model"] = model
+    _assert_sanitized_protocol_failure(value)
+
+
+@pytest.mark.parametrize("model", ["", " \t", "m" * (_MODEL_MAX_LENGTH + 1)])
+def test_public_capabilities_reject_invalid_model_names(model: str) -> None:
+    """Direct public model construction enforces the same bounded contract."""
+    value = validate_capabilities(_supported_capabilities()).model_dump()
+    value["model"] = model
+    with pytest.raises(ValidationError):
+        HermesCapabilities.model_validate(value)
+
+
+def test_model_boundary_preserves_the_exact_advertised_value() -> None:
+    """Valid boundary whitespace is retained rather than normalized."""
+    value = _supported_capabilities()
+    value["model"] = " " + "m" * (_MODEL_MAX_LENGTH - 2) + " "
+    result = validate_capabilities(value)
+    assert result.model == value["model"]
+
+
+def test_over_limit_model_is_a_protocol_failure() -> None:
+    """A model name beyond 255 code points is a safe protocol failure."""
+    value = _supported_capabilities()
+    value["model"] = "m" * (_MODEL_MAX_LENGTH + 1)
+    _assert_sanitized_protocol_failure(value)
+
+
 def test_supported_capabilities_produce_an_immutable_typed_value() -> None:
     """The canonical document maps to the exact supported semantic contract."""
     result = validate_capabilities(_supported_capabilities())
@@ -110,6 +174,7 @@ def test_supported_capabilities_produce_an_immutable_typed_value() -> None:
     assert result == HermesCapabilities(
         object="hermes.api_server.capabilities",
         platform="hermes-agent",
+        model="hermes-agent",
         auth_type="bearer",
         auth_required=True,
         chat_completions=True,
@@ -204,6 +269,7 @@ def test_unsupported_semantics_are_safe_protocol_failures(
     [
         ("object",),
         ("platform",),
+        ("model",),
         ("auth",),
         ("auth", "type"),
         ("auth", "required"),

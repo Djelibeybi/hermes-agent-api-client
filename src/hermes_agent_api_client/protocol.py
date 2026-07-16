@@ -189,8 +189,16 @@ class _FeaturesWire(_WireModel):
 class _CapabilitiesWire(_WireModel):
     object: Literal["hermes.api_server.capabilities"]
     platform: Literal["hermes-agent"]
+    model: Annotated[str, StringConstraints(min_length=1, max_length=255)]
     auth: _AuthWire
     features: _FeaturesWire
+
+    @field_validator("model")
+    @classmethod
+    def _reject_whitespace_only_model(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError
+        return value
 
 
 type _NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
@@ -260,6 +268,7 @@ def validate_capabilities(value: object) -> HermesCapabilities:
     return HermesCapabilities(
         object=parsed.object,
         platform=parsed.platform,
+        model=parsed.model,
         auth_type=parsed.auth.type,
         auth_required=parsed.auth.required,
         chat_completions=parsed.features.chat_completions,

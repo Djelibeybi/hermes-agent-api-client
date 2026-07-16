@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar
+from typing import Annotated, ClassVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StringConstraints, field_validator
 
 
 class _FrozenModel(BaseModel):
@@ -29,15 +29,30 @@ class TerminalOutcome(StrEnum):
     UPSTREAM_ERROR = "upstream_error"
 
 
+_HERMES_MODEL_MAX_LENGTH = 255
+type _HermesModelName = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=_HERMES_MODEL_MAX_LENGTH),
+]
+
+
 class HermesCapabilities(_FrozenModel):
     """Validated minimum semantics for a supported Hermes server."""
 
     object: str
     platform: str
+    model: _HermesModelName
     auth_type: str
     auth_required: bool
     chat_completions: bool
     chat_completions_streaming: bool
+
+    @field_validator("model")
+    @classmethod
+    def _reject_whitespace_only_model(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError
+        return value
 
 
 class AssistantDeltaEvent(_FrozenModel):
