@@ -14,6 +14,7 @@ from .models import (
     TerminalEvent,
     TerminalOutcome,
     ToolProgressEvent,
+    ToolProgressStatus,
     UsageEvent,
 )
 from .protocol import (
@@ -103,7 +104,13 @@ def _decode_application_record(  # noqa: PLR0911 - every invalid wire shape exit
         progress = _parse_tool_progress(document)
         if progress is None:
             return None
-        return (ToolProgressEvent(tool_name=progress.tool, status=progress.status),)
+        return (
+            ToolProgressEvent(
+                tool_call_id=progress.tool_call_id,
+                tool_name=progress.tool,
+                status=ToolProgressStatus(progress.status),
+            ),
+        )
     if event_name not in (None, "", "message"):
         return None
 

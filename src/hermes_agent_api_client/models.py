@@ -29,6 +29,35 @@ class TerminalOutcome(StrEnum):
     UPSTREAM_ERROR = "upstream_error"
 
 
+class ToolProgressStatus(StrEnum):
+    """Closed lifecycle states for one Hermes tool invocation."""
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+
+
+class TerminalFailureReason(StrEnum):
+    """Safe bounded reasons for a non-success terminal event."""
+
+    OUTPUT_TRUNCATED = "output_truncated"
+    AGENT_ERROR = "agent_error"
+    UNKNOWN = "unknown"
+
+
+_LIFECYCLE_TEXT_MAX = 256
+
+
+def _require_lifecycle_text(value: object) -> str:
+    """Require exact bounded visible ASCII without retaining rejected values."""
+    if type(value) is not str:
+        raise ValueError
+    if not 1 <= len(value) <= _LIFECYCLE_TEXT_MAX:
+        raise ValueError
+    if any(not "!" <= char <= "~" for char in value):
+        raise ValueError
+    return value
+
+
 _HERMES_MODEL_MAX_LENGTH = 255
 type _HermesModelName = Annotated[
     str,
@@ -64,8 +93,14 @@ class AssistantDeltaEvent(_FrozenModel):
 class ToolProgressEvent(_FrozenModel):
     """Bounded non-assistant progress metadata for a tool invocation."""
 
+    tool_call_id: str
     tool_name: str
-    status: str
+    status: ToolProgressStatus
+
+    @field_validator("tool_call_id", "tool_name", mode="before")
+    @classmethod
+    def _require_exact_lifecycle_text(cls, value: object) -> str:
+        return _require_lifecycle_text(value)
 
 
 class UsageEvent(_FrozenModel):
@@ -84,6 +119,8 @@ class TerminalEvent(_FrozenModel):
     """An explicit success or typed non-success stream result."""
 
     outcome: TerminalOutcome
+    partial: bool = False
+    failure_reason: TerminalFailureReason | None = None
 
 
 type HermesEvent = (

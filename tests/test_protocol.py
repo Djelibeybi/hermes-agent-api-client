@@ -888,7 +888,7 @@ def test_terminal_event_defaults_and_strict_metadata_contract() -> None:
 
 @pytest.mark.parametrize(
     "rejected",
-    ["lifecycle-secret-canary", object()],
+    ["lifecycle secret canary", object()],
 )
 def test_lifecycle_validator_failure_is_input_value_free(rejected: object) -> None:
     """The shared validator raises without rendering rejected lifecycle data."""
@@ -896,7 +896,7 @@ def test_lifecycle_validator_failure_is_input_value_free(rejected: object) -> No
         hermes_models._require_lifecycle_text(rejected)  # pyright: ignore[reportPrivateUsage]
 
     rendered = f"{caught.value!s} | {caught.value!r} | {caught.value.args!r}"
-    assert "lifecycle-secret-canary" not in rendered
+    assert "lifecycle secret canary" not in rendered
 
 
 def test_failure_categories_are_stable_and_distinct() -> None:

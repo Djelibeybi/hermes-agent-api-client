@@ -16,7 +16,11 @@ from pydantic import (
     field_validator,
 )
 
-from .models import FailureCategory, HermesCapabilities
+from .models import (
+    FailureCategory,
+    HermesCapabilities,
+    _require_lifecycle_text,  # pyright: ignore[reportPrivateUsage]
+)
 
 
 def _validate_error_metadata(
@@ -225,13 +229,18 @@ class _CapabilitiesWire(_WireModel):
         return value
 
 
-type _NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
 type _NonNegativeInteger = Annotated[int, Field(ge=0)]
 
 
 class _ToolProgressWire(_WireModel):
-    tool: _NonEmptyString
-    status: _NonEmptyString
+    tool_call_id: str = Field(alias="toolCallId")
+    tool: str
+    status: Literal["running", "completed"]
+
+    @field_validator("tool_call_id", "tool", mode="before")
+    @classmethod
+    def _require_exact_lifecycle_text(cls, value: object) -> str:
+        return _require_lifecycle_text(value)
 
 
 class _DeltaWire(_WireModel):
