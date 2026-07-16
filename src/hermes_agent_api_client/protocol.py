@@ -256,6 +256,7 @@ class _ChatChunkWire(_WireModel):
 
 
 _MAPPING_ACCESS_FAILURE = object()
+_STRING_COMPARISON_FAILURE = object()
 
 
 def _safe_mapping_get(mapping: Mapping[object, object], key: str) -> object:
@@ -266,6 +267,16 @@ def _safe_mapping_get(mapping: Mapping[object, object], key: str) -> object:
         return _MAPPING_ACCESS_FAILURE
 
 
+def _safe_exact_string_match(value: object, expected: str) -> object:
+    """Compare one string or return an input-independent failure sentinel."""
+    if not isinstance(value, str):
+        return False
+    try:
+        return value == expected
+    except Exception:  # noqa: BLE001 - hostile strings reduce to safe metadata
+        return _STRING_COMPARISON_FAILURE
+
+
 def _classify_capability_identity(
     document: Mapping[object, object],
 ) -> _CapabilityFailureKind | None:
@@ -273,17 +284,22 @@ def _classify_capability_identity(
     object_value = _safe_mapping_get(document, "object")
     if object_value is _MAPPING_ACCESS_FAILURE:
         return _CapabilityFailureKind.PROTOCOL
-    if not isinstance(object_value, str) or (
-        object_value != "hermes.api_server.capabilities"
-    ):
+    object_matches = _safe_exact_string_match(
+        object_value,
+        "hermes.api_server.capabilities",
+    )
+    if object_matches is _STRING_COMPARISON_FAILURE:
+        return _CapabilityFailureKind.PROTOCOL
+    if object_matches is not True:
         return _CapabilityFailureKind.IDENTITY
 
     platform_value = _safe_mapping_get(document, "platform")
     if platform_value is _MAPPING_ACCESS_FAILURE:
         return _CapabilityFailureKind.PROTOCOL
-    if not isinstance(platform_value, str) or platform_value != "hermes-agent":
-        return _CapabilityFailureKind.IDENTITY
-    return None
+    platform_matches = _safe_exact_string_match(platform_value, "hermes-agent")
+    if platform_matches is _STRING_COMPARISON_FAILURE:
+        return _CapabilityFailureKind.PROTOCOL
+    return None if platform_matches is True else _CapabilityFailureKind.IDENTITY
 
 
 def _classify_required_chat_support(

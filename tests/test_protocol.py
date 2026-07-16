@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 _EVENT_RECORD_COUNT = 7
 _MODEL_MAX_LENGTH = 255
 _HOSTILE_ACCESS_CANARY = "hostile-mapping-access-canary"
+_HOSTILE_EQUALITY_CANARY = "hostile-string-equality-canary"
 _HOSTILE_ITERATION_CANARY = "hostile-mapping-iteration-canary"
 
 
@@ -85,6 +86,19 @@ class _HostileIterationMapping(Mapping[str, object]):
 
     def __len__(self) -> int:
         return len(self._values)
+
+
+class _HostileString(str):
+    """A string whose discriminator comparison raises a private detail."""
+
+    __slots__ = ()
+    __hash__ = str.__hash__
+
+    def __eq__(self, value: object) -> bool:
+        raise RuntimeError(_HOSTILE_EQUALITY_CANARY)
+
+    def __ne__(self, value: object) -> bool:
+        return self.__eq__(value)
 
 
 def _supported_capabilities() -> dict[str, Any]:
@@ -527,6 +541,26 @@ def test_hostile_chat_support_access_is_a_scrubbed_protocol_error() -> None:
         error,
         canaries=(_HOSTILE_ACCESS_CANARY,),
         forbidden_objects=(rejected, rejected["features"]),
+    )
+
+
+@pytest.mark.parametrize("path", ["object", "platform"])
+def test_hostile_discriminator_equality_is_a_scrubbed_protocol_error(
+    path: str,
+) -> None:
+    """Discriminator comparison exceptions reduce to safe generic protocol."""
+    rejected = _supported_capabilities()
+    hostile_value = _HostileString(cast("str", rejected[path]))
+    rejected[path] = hostile_value
+
+    error = _assert_sanitized_protocol_failure(rejected)
+
+    assert type(error) is HermesProtocolError
+    assert _HOSTILE_EQUALITY_CANARY not in "".join(traceback.format_exception(error))
+    _assert_package_traceback_is_scrubbed(
+        error,
+        canaries=(_HOSTILE_EQUALITY_CANARY,),
+        forbidden_objects=(rejected, hostile_value),
     )
 
 
