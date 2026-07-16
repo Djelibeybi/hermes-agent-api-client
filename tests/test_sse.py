@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import traceback
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import pytest
 
@@ -18,6 +18,7 @@ from hermes_agent_api_client import (
     TerminalEvent,
     TerminalOutcome,
     ToolProgressEvent,
+    ToolProgressStatus,
     UsageEvent,
 )
 from hermes_agent_api_client.sse import (
@@ -25,12 +26,26 @@ from hermes_agent_api_client.sse import (
     MAX_PENDING_BYTES,
     async_decode_hermes_sse,
 )
-from tests.helpers.hermes import load_golden_bytes, partition_bytes
+from tests.helpers.hermes import (
+    load_golden_bytes,
+    partition_bytes,
+    raw_json_object_sse_record,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Iterable
+    from types import FrameType
 
 _BOOLEAN_TOKEN_COUNT: object = True
+
+
+class _HasAsyncGeneratorFrame(Protocol):
+    """Structural view of the CPython async-generator inspection surface."""
+
+    @property
+    def ag_frame(self) -> FrameType | None:
+        """Return the retained generator frame, if the generator is open."""
+        ...
 
 
 async def _chunks(parts: tuple[bytes, ...]) -> AsyncIterator[bytes]:
@@ -568,6 +583,169 @@ async def test_tool_progress_wire_rejects_non_contract_text(
 
     with pytest.raises(HermesProtocolError):
         await _decode((_data_record(document, event="hermes.tool.progress"),))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bytewise", [False, True], ids=["whole", "bytewise"])
+async def test_tool_progress_pair_fixture_preserves_exact_correlation_and_order(
+    bytewise: object,
+) -> None:
+    """The immutable pair remains running then completed with one exact ID."""
+    assert isinstance(bytewise, bool)
+    payload = load_golden_bytes("chat_completions/tool_progress_pair.sse")
+    parts = partition_bytes(payload) if bytewise else (payload,)
+
+    assert await _decode(parts) == (
+        ToolProgressEvent(
+            tool_call_id="call_terminal_1",
+            tool_name="terminal",
+            status=ToolProgressStatus.RUNNING,
+        ),
+        ToolProgressEvent(
+            tool_call_id="call_terminal_1",
+            tool_name="terminal",
+            status=ToolProgressStatus.COMPLETED,
+        ),
+        UsageEvent(input_tokens=1, output_tokens=1, total_tokens=2),
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_progress_preserves_punctuation_case_repeats_and_interleaving() -> (
+    None
+):
+    """Accepted lifecycle facts are neither normalized, deduplicated, nor reordered."""
+    records = tuple(
+        _data_record(
+            {"toolCallId": call_id, "tool": tool, "status": status},
+            event="hermes.tool.progress",
+        )
+        for call_id, tool, status in (
+            ("Call/A?=1", "Tool.Name+CASE", "running"),
+            ("other", "second", "running"),
+            ("Call/A?=1", "Tool.Name+CASE", "running"),
+            ("other", "second", "completed"),
+        )
+    )
+
+    prefix = await _decode_prefix_before_failure(
+        (*records, b"data: {interruption-canary}\n\n")
+    )
+
+    assert prefix == (
+        ToolProgressEvent(
+            tool_call_id="Call/A?=1",
+            tool_name="Tool.Name+CASE",
+            status=ToolProgressStatus.RUNNING,
+        ),
+        ToolProgressEvent(
+            tool_call_id="other",
+            tool_name="second",
+            status=ToolProgressStatus.RUNNING,
+        ),
+        ToolProgressEvent(
+            tool_call_id="Call/A?=1",
+            tool_name="Tool.Name+CASE",
+            status=ToolProgressStatus.RUNNING,
+        ),
+        ToolProgressEvent(
+            tool_call_id="other",
+            tool_name="second",
+            status=ToolProgressStatus.COMPLETED,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["toolCallId", "tool", "status"])
+@pytest.mark.parametrize("conflicting", [False, True], ids=["same", "conflicting"])
+async def test_duplicate_approved_tool_members_fail_before_dictionary_collapse(
+    field: str,
+    conflicting: object,
+) -> None:
+    """Every repeated approved singleton fails, even when both values agree."""
+    assert isinstance(conflicting, bool)
+    values = {
+        "toolCallId": '"call-contract-001"',
+        "tool": '"home_assistant"',
+        "status": '"running"',
+    }
+    duplicate = values[field]
+    if conflicting:
+        duplicate = {
+            "toolCallId": '"call-contract-002"',
+            "tool": '"other_tool"',
+            "status": '"completed"',
+        }[field]
+    members = (*values.items(), (field, duplicate))
+    record = raw_json_object_sse_record(
+        members,
+        event="hermes.tool.progress",
+    )
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((record + _canonical_records()[6],))
+
+
+@pytest.mark.asyncio
+async def test_duplicates_inside_ignored_additive_objects_remain_compatible() -> None:
+    """Duplicate spelling outside approved paths does not become an alias."""
+    progress = raw_json_object_sse_record(
+        (
+            ("toolCallId", '"call-contract-001"'),
+            ("tool", '"home_assistant"'),
+            ("status", '"running"'),
+            ("future", '{"status":"running","status":"completed"}'),
+        ),
+        event="hermes.tool.progress",
+    )
+
+    assert await _decode((progress + _canonical_records()[6],)) == (
+        ToolProgressEvent(
+            tool_call_id="call-contract-001",
+            tool_name="home_assistant",
+            status=ToolProgressStatus.RUNNING,
+        ),
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_raw_payloads_and_pair_tree_are_scrubbed_on_failure() -> None:
+    """Raw additive data and duplicate evidence never survive protocol failure."""
+    canaries = (
+        "tool-emoji-canary",
+        "tool-label-canary",
+        "tool-arguments-canary",
+        "tool-results-canary",
+        "tool-nested-canary",
+    )
+    record = raw_json_object_sse_record(
+        (
+            ("toolCallId", '"call-contract-001"'),
+            ("tool", '"home_assistant"'),
+            ("status", '"running"'),
+            ("status", '"completed"'),
+            ("emoji", f'"{canaries[0]}"'),
+            ("label", f'"{canaries[1]}"'),
+            ("arguments", f'{{"value":"{canaries[2]}"}}'),
+            ("results", f'["{canaries[3]}"]'),
+            ("raw", f'{{"nested":"{canaries[4]}"}}'),
+        ),
+        event="hermes.tool.progress",
+    )
+    stream = cast("AsyncGenerator[object]", async_decode_hermes_sse(_chunks((record,))))
+
+    with pytest.raises(HermesProtocolError) as caught:
+        await anext(stream)
+
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=canaries,
+        forbidden_objects=(record,),
+    )
+    assert cast("_HasAsyncGeneratorFrame", stream).ag_frame is None
 
 
 @pytest.mark.asyncio

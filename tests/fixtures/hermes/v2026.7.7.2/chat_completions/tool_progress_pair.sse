@@ -7,3 +7,4 @@ data: {"tool": "terminal", "toolCallId": "call_terminal_1", "status": "completed
 data: {"id": "chatcmpl-phase2-tool-pair", "object": "chat.completion.chunk", "created": 1784246400, "model": "hermes-agent", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
 
 data: [DONE]
+

@@ -101,7 +101,7 @@
     },
     {
       "path": "chat_completions/tool_progress_pair.sse",
-      "sha256": "eef58feb5177e66e56fa44f3a5b3cc9d72ae0b1f889c6f4c9a6e25dd3501214a",
+      "sha256": "517f939e9dbdb3d2d16b876846e0458684a99999b2b5e541d3583a1a2ef826db",
       "hermes_release": "v2026.7.7.2",
       "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
       "evidence_date": "2026-07-17",

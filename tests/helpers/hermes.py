@@ -92,6 +92,24 @@ def add_json_key(
     return result
 
 
+def raw_json_object_sse_record(
+    members: Sequence[tuple[str, str]],
+    *,
+    event: str | None = None,
+) -> bytes:
+    """Build one raw JSON-object SSE record without collapsing duplicate names.
+
+    Each member value is an already-encoded JSON fragment. Keeping the input as
+    an ordered sequence of name/fragment pairs lets contract tests represent
+    duplicate object names that a Python dictionary would erase.
+    """
+    encoded_members = ",".join(
+        f"{json.dumps(name, ensure_ascii=False)}:{value}" for name, value in members
+    )
+    event_line = b"" if event is None else f"event: {event}\n".encode()
+    return event_line + f"data: {{{encoded_members}}}\n\n".encode()
+
+
 def partition_bytes(
     payload: bytes, split_points: Iterable[int] | None = None
 ) -> tuple[bytes, ...]:
