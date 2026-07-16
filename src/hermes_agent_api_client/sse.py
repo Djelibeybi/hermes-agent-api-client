@@ -20,8 +20,11 @@ from .models import (
 from .protocol import (
     HermesProtocolError,
     HermesTransportError,
+    _json_object_pairs_hook,  # pyright: ignore[reportPrivateUsage]
     _parse_chat_chunk,  # pyright: ignore[reportPrivateUsage]
     _parse_tool_progress,  # pyright: ignore[reportPrivateUsage]
+    _project_chat_chunk_object,  # pyright: ignore[reportPrivateUsage]
+    _project_tool_progress_object,  # pyright: ignore[reportPrivateUsage]
 )
 
 if TYPE_CHECKING:
@@ -74,8 +77,8 @@ def _reraise_cancellation(cancellation: asyncio.CancelledError) -> Never:
 def _load_json_safely(data: str) -> tuple[bool, object]:
     """Parse JSON without retaining a value-bearing parser exception."""
     try:
-        return (True, json.loads(data))
-    except (json.JSONDecodeError, UnicodeError):
+        return (True, json.loads(data, object_pairs_hook=_json_object_pairs_hook))
+    except (json.JSONDecodeError, RecursionError, UnicodeError):
         return (False, None)
 
 
@@ -92,7 +95,7 @@ def _decode_utf8_safely(
         return (False, "")
 
 
-def _decode_application_record(  # noqa: PLR0911 - every invalid wire shape exits locally
+def _decode_application_record(  # noqa: C901, PLR0911 - invalid wire shapes exit locally
     event_name: str | None,
     data: str,
 ) -> tuple[HermesEvent, ...] | None:
@@ -101,7 +104,12 @@ def _decode_application_record(  # noqa: PLR0911 - every invalid wire shape exit
     if not valid_json:
         return None
     if event_name == "hermes.tool.progress":
-        progress = _parse_tool_progress(document)
+        projected = _project_tool_progress_object(document)
+        document = None
+        if projected is None:
+            return None
+        progress = _parse_tool_progress(projected)
+        projected = None
         if progress is None:
             return None
         return (
@@ -114,7 +122,12 @@ def _decode_application_record(  # noqa: PLR0911 - every invalid wire shape exit
     if event_name not in (None, "", "message"):
         return None
 
-    chunk = _parse_chat_chunk(document)
+    projected = _project_chat_chunk_object(document)
+    document = None
+    if projected is None:
+        return None
+    chunk = _parse_chat_chunk(projected)
+    projected = None
     if chunk is None:
         return None
     choice = chunk.choices[0]

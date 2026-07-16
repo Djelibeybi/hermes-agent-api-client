@@ -117,6 +117,103 @@ class _CapabilityFailureKind(StrEnum):
     PROTOCOL = "protocol"
 
 
+@dataclass(frozen=True, slots=True)
+class _JsonObjectPairs:
+    """One JSON object whose ordered members retain duplicate-name evidence."""
+
+    pairs: tuple[tuple[str, object], ...]
+
+
+def _json_object_pairs_hook(  # pyright: ignore[reportUnusedFunction]
+    pairs: list[tuple[str, object]],
+) -> _JsonObjectPairs:
+    """Keep one decoded JSON object distinct from arrays and ordinary mappings."""
+    return _JsonObjectPairs(tuple(pairs))
+
+
+def _materialize_json_value(value: object) -> object:
+    """Recursively convert private pair nodes into ordinary JSON containers."""
+    if isinstance(value, _JsonObjectPairs):
+        return {
+            key: _materialize_json_value(member_value)
+            for key, member_value in value.pairs
+        }
+    if isinstance(value, list):
+        items = cast("list[object]", value)
+        return [_materialize_json_value(item) for item in items]
+    return value
+
+
+def _has_duplicate_member(value: _JsonObjectPairs, member_name: str) -> bool:
+    """Report whether one exact object member occurs more than once."""
+    found = False
+    for name, _ in value.pairs:
+        if name != member_name:
+            continue
+        if found:
+            return True
+        found = True
+    return False
+
+
+def _last_member_value(value: _JsonObjectPairs, member_name: str) -> object:
+    """Return the last value for an additive-compatible object member."""
+    result: object = _MISSING_JSON_MEMBER
+    for name, member_value in value.pairs:
+        if name == member_name:
+            result = member_value
+    return result
+
+
+_MISSING_JSON_MEMBER = object()
+_TOOL_PROGRESS_MEMBERS = frozenset(("toolCallId", "tool", "status"))
+
+
+def _project_tool_progress_object(  # pyright: ignore[reportUnusedFunction]
+    value: object,
+) -> dict[str, object] | None:
+    """Project unique approved progress members and discard all additive data."""
+    if not isinstance(value, _JsonObjectPairs):
+        return None
+
+    projected: dict[str, object] = {}
+    try:
+        for name, member_value in value.pairs:
+            if name not in _TOOL_PROGRESS_MEMBERS:
+                continue
+            if name in projected:
+                return None
+            projected[name] = _materialize_json_value(member_value)
+    except RecursionError:
+        return None
+    return projected
+
+
+def _project_chat_chunk_object(  # pyright: ignore[reportUnusedFunction]
+    value: object,
+) -> dict[str, object] | None:
+    """Check approved chat duplicates, then materialize the complete wire tree."""
+    if not isinstance(value, _JsonObjectPairs):
+        return None
+    if _has_duplicate_member(value, "hermes"):
+        return None
+
+    choices = _last_member_value(value, "choices")
+    choice_values = cast("list[object]", choices) if isinstance(choices, list) else []
+    if (
+        len(choice_values) == 1
+        and isinstance(choice_values[0], _JsonObjectPairs)
+        and _has_duplicate_member(choice_values[0], "finish_reason")
+    ):
+        return None
+
+    try:
+        materialized = _materialize_json_value(value)
+    except RecursionError:
+        return None
+    return cast("dict[str, object]", materialized)
+
+
 def _raise_capability_failure(kind: _CapabilityFailureKind) -> Never:
     """Raise the exact safe capability failure from an input-free frame."""
     if kind is _CapabilityFailureKind.IDENTITY:

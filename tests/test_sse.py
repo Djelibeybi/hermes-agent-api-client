@@ -969,6 +969,7 @@ async def test_duplicate_finish_application_data_after_terminal_is_rejected() ->
     [
         b"data: {not-json}\n\n",
         _data_record(None),
+        _data_record([], event="hermes.tool.progress"),
         _data_record({"choices": []}),
         _data_record(
             cast("object", {"choices": [{"delta": [], "finish_reason": None}]})
@@ -1024,6 +1025,7 @@ async def test_duplicate_finish_application_data_after_terminal_is_rejected() ->
     ids=[
         "invalid-json",
         "non-object",
+        "non-object-progress",
         "empty-choices",
         "invalid-delta",
         "invalid-content",
@@ -1081,6 +1083,48 @@ async def test_wire_validation_failures_retain_no_private_input_exception() -> N
     assert error.__cause__ is None
     assert error.__context__ is None
     assert canary not in "".join(traceback.format_exception(error))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event", "document"),
+    [
+        (
+            "hermes.tool.progress",
+            {
+                "toolCallId": "call-contract-001",
+                "tool": "home_assistant",
+                "status": "running",
+            },
+        ),
+        (
+            None,
+            {
+                "choices": [
+                    {"delta": {"content": "not-retained"}, "finish_reason": None}
+                ]
+            },
+        ),
+    ],
+    ids=["tool", "chat"],
+)
+async def test_pair_materialization_recursion_fails_as_protocol_error(
+    event: str | None,
+    document: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A projection recursion limit remains a sanitized protocol failure."""
+
+    def fail_materialization(_: object) -> object:
+        raise RecursionError
+
+    monkeypatch.setattr(
+        "hermes_agent_api_client.protocol._materialize_json_value",
+        fail_materialization,
+    )
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((_data_record(document, event=event),))
 
 
 @pytest.mark.asyncio
