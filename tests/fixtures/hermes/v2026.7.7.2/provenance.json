@@ -153,6 +153,204 @@
         "emoji and label occur only on the running record where tagged source emits them",
         "a valid stop chunk and DONE marker complete the evidence sequence"
       ]
+    },
+    {
+      "path": "chat_completions/terminal_length.sse",
+      "sha256": "5fb3fd1a952f808b879cb07bb61653e9b1abb09024a04e1a8820936882813009",
+      "hermes_release": "v2026.7.7.2",
+      "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+      "evidence_date": "2026-07-17",
+      "purpose": "Immutable source-derived length terminal row with exact lifecycle booleans, output_truncated code, raw ignored error canaries, and DONE framing.",
+      "fixture_kind": "chat-completions-sse",
+      "evidence_kind": "tag-source-derived",
+      "source_refs": [
+        {
+          "repository": "https://github.com/NousResearch/hermes-agent",
+          "commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+          "path": "gateway/platforms/api_server.py",
+          "line_start": 2500,
+          "line_end": 2564,
+          "anchor_sha256": "f92b2677b9f60cda4af6ce1b4ae3fe6294769d064042e01e7ff3324345b2e907",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/9de9c25f620ff7f1ce0fd5457d596052d5159596/gateway/platforms/api_server.py#L2500-L2564"
+        },
+        {
+          "repository": "https://github.com/NousResearch/hermes-agent",
+          "commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+          "path": "tests/gateway/test_api_server.py",
+          "line_start": 3083,
+          "line_end": 3111,
+          "anchor_sha256": "16b5e92f25b98aadf165c4a53e84a7108f1eca66bd84facab7befac29e4cc2d3",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/9de9c25f620ff7f1ce0fd5457d596052d5159596/tests/gateway/test_api_server.py#L3083-L3111"
+        }
+      ],
+      "reproduction": {
+        "mode": "detached-tag-source-derivation",
+        "procedure": [
+          "Detach the upstream repository at the canonical peeled commit and inspect the non-stop finish chunk serializer.",
+          "Cross-check the tagged truncation regression for completed false, partial true, and output_truncated.",
+          "Preserve the source-shaped length chunk, including raw error canaries that the public contract must discard, followed by DONE.",
+          "Hash the complete immutable LF-delimited byte sequence."
+        ],
+        "configuration": {
+          "finish_reason": "length",
+          "completed": false,
+          "partial": true,
+          "failed": false,
+          "error_code": "output_truncated",
+          "live_server_invoked": false
+        }
+      },
+      "semantic_assertions": [
+        "finish_reason is length",
+        "completed is false, partial is true, and failed is false",
+        "error_code is output_truncated",
+        "raw root and hermes error values are ignored canaries rather than public facts",
+        "DONE follows the terminal chunk"
+      ]
+    },
+    {
+      "path": "chat_completions/terminal_agent_error.sse",
+      "sha256": "f448a514abb837160ccf12e792ca105bb12526da6fdfb76b5403c39ed3e2a9b2",
+      "hermes_release": "v2026.7.7.2",
+      "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+      "evidence_date": "2026-07-17",
+      "purpose": "Immutable source-derived valid agent-error terminal row with the exact server partial boolean and raw ignored error canaries.",
+      "fixture_kind": "chat-completions-sse",
+      "evidence_kind": "tag-source-derived",
+      "source_refs": [
+        {
+          "repository": "https://github.com/NousResearch/hermes-agent",
+          "commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+          "path": "gateway/platforms/api_server.py",
+          "line_start": 2520,
+          "line_end": 2564,
+          "anchor_sha256": "7a7fb96675b392d0e98ff4ed7ff70b66ef481f445345415b88fb500e4ec842ad",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/9de9c25f620ff7f1ce0fd5457d596052d5159596/gateway/platforms/api_server.py#L2520-L2564"
+        }
+      ],
+      "reproduction": {
+        "mode": "detached-tag-source-derivation",
+        "procedure": [
+          "Detach the upstream repository at the canonical peeled commit and inspect result classification plus the non-stop finish chunk serializer.",
+          "Apply the serializer to a deterministic failed result with completed false, partial false, and failed true.",
+          "Preserve the source-shaped error chunk, including raw ignored error canaries, followed by DONE.",
+          "Hash the complete immutable LF-delimited byte sequence."
+        ],
+        "configuration": {
+          "finish_reason": "error",
+          "completed": false,
+          "partial": false,
+          "failed": true,
+          "error_code": "agent_error",
+          "live_server_invoked": false
+        }
+      },
+      "semantic_assertions": [
+        "finish_reason is error",
+        "completed is false, partial is false, and failed is true",
+        "error_code is agent_error",
+        "raw root and hermes error values are ignored canaries rather than public facts",
+        "DONE follows the terminal chunk"
+      ]
+    },
+    {
+      "path": "chat_completions/terminal_task_exception_contradiction.sse",
+      "sha256": "45c7ef26b2e61540b10ce471c395e93e1b0c591a1dc4141337e1c66e6ec8d8ef",
+      "hermes_release": "v2026.7.7.2",
+      "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+      "evidence_date": "2026-07-17",
+      "purpose": "Immutable source-derived task-exception contradiction retained as an explicit rejection expectation.",
+      "fixture_kind": "chat-completions-sse",
+      "evidence_kind": "tag-source-derived",
+      "source_refs": [
+        {
+          "repository": "https://github.com/NousResearch/hermes-agent",
+          "commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+          "path": "gateway/platforms/api_server.py",
+          "line_start": 2509,
+          "line_end": 2562,
+          "anchor_sha256": "070024b02ca7ca500b1d469d2d19e419c31f4acb3a33f7efcf52bb88c585775e",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/9de9c25f620ff7f1ce0fd5457d596052d5159596/gateway/platforms/api_server.py#L2509-L2562"
+        }
+      ],
+      "reproduction": {
+        "mode": "detached-tag-source-derivation",
+        "procedure": [
+          "Detach the upstream repository at the canonical peeled commit and inspect the agent-task exception branch.",
+          "Follow the branch where result remains None, completed defaults true, and agent_error forces failed true with finish_reason error.",
+          "Preserve the contradictory source-shaped chunk with raw ignored error canaries followed by DONE.",
+          "Hash the complete immutable LF-delimited byte sequence."
+        ],
+        "configuration": {
+          "finish_reason": "error",
+          "completed": true,
+          "partial": false,
+          "failed": true,
+          "error_code": "agent_error",
+          "expected_disposition": "reject-as-HermesProtocolError",
+          "live_server_invoked": false
+        }
+      },
+      "semantic_assertions": [
+        "finish_reason is error",
+        "completed true and failed true form the tagged contradiction",
+        "the expected client disposition is HermesProtocolError rather than precedence normalization",
+        "raw root and hermes error values are ignored canaries rather than public facts",
+        "DONE follows the contradictory terminal chunk"
+      ]
+    },
+    {
+      "path": "chat_completions/terminal_design_matrix.json",
+      "sha256": "a1c482e8eb269594e13354cb207ef6e4200cf6ac0e84b26699a6f14ac18d5042",
+      "hermes_release": "v2026.7.7.2",
+      "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+      "evidence_date": "2026-07-17",
+      "purpose": "Immutable design-derived terminal rows for approved omissions, bounded unknown safe codes, and explicit null rejection.",
+      "fixture_kind": "terminal-design-matrix",
+      "evidence_kind": "design-derived",
+      "decision_refs": [
+        "D-01",
+        "D-02",
+        "D-03",
+        "D-04"
+      ],
+      "source_refs": [
+        {
+          "repository": "https://github.com/NousResearch/hermes-agent",
+          "commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+          "path": "gateway/platforms/api_server.py",
+          "line_start": 2520,
+          "line_end": 2564,
+          "anchor_sha256": "7a7fb96675b392d0e98ff4ed7ff70b66ef481f445345415b88fb500e4ec842ad",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/9de9c25f620ff7f1ce0fd5457d596052d5159596/gateway/platforms/api_server.py#L2520-L2564"
+        }
+      ],
+      "reproduction": {
+        "mode": "approved-design-derivation",
+        "procedure": [
+          "Inspect the canonical tagged terminal envelope at the exact peeled commit.",
+          "Apply D-01 through D-04 to enumerate approved omission and bounded unknown-code rows not emitted by the tag, plus explicit null rejection rows.",
+          "Record expected public events or HermesProtocolError without adding raw upstream error data.",
+          "Serialize with two-space JSON indentation and one trailing newline, then record the SHA-256."
+        ],
+        "configuration": {
+          "canonical_envelope": "root-hermes",
+          "approved_decisions": [
+            "D-01",
+            "D-02",
+            "D-03",
+            "D-04"
+          ],
+          "live_server_invoked": false
+        }
+      },
+      "semantic_assertions": [
+        "every row cites its applicable D-01 through D-04 decision",
+        "approved stop and length omissions map to exact public terminal events",
+        "error requires an exact partial boolean",
+        "a bounded unknown safe code maps to UNKNOWN without exposing the raw code",
+        "explicit null lifecycle metadata rejects as HermesProtocolError"
+      ]
     }
   ]
 }

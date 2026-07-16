@@ -49,6 +49,7 @@ _EXPECTED_KINDS = {
 _DECISIONS = frozenset({"D-01", "D-02", "D-03", "D-04"})
 _PROVENANCE_SCHEMA_VERSION = 3
 _TERMINAL_RECORD_COUNT = 2
+_LIFECYCLE_TEXT_MAX = 256
 
 
 class ProvenanceError(RuntimeError):
@@ -451,6 +452,47 @@ def _contains_none(value: object) -> bool:
     return False
 
 
+def _is_lifecycle_text(value: object) -> bool:
+    return (
+        type(value) is str
+        and 1 <= len(value) <= _LIFECYCLE_TEXT_MAX
+        and all("!" <= character <= "~" for character in value)
+    )
+
+
+def _verify_accepted_public_event(
+    case_id: str, wire: Mapping[str, Any], public_event: Mapping[str, Any]
+) -> None:
+    finish = wire.get("finish_reason")
+    hermes = wire.get("hermes", {})
+    if not isinstance(hermes, dict):
+        _fail(f"invalid-accepted-hermes:{case_id}")
+    if finish == "stop":
+        expected = {"outcome": "success", "partial": False, "failure_reason": None}
+    elif finish == "length":
+        expected = {
+            "outcome": "length",
+            "partial": True,
+            "failure_reason": "output_truncated",
+        }
+    elif finish == "error":
+        partial = hermes.get("partial")
+        if type(partial) is not bool:
+            _fail(f"invalid-accepted-error-partial:{case_id}")
+        code = hermes.get("error_code", "agent_error")
+        if not _is_lifecycle_text(code):
+            _fail(f"invalid-accepted-error-code:{case_id}")
+        expected = {
+            "outcome": "upstream_error",
+            "partial": partial,
+            "failure_reason": "agent_error" if code == "agent_error" else "unknown",
+        }
+    else:
+        _fail(f"invalid-accepted-finish-reason:{case_id}")
+    if public_event != expected:
+        _fail(f"public-event-semantics-mismatch:{case_id}")
+
+
 def _verify_design_matrix(  # noqa: C901, PLR0912
     path: Path,
 ) -> None:
@@ -482,7 +524,7 @@ def _verify_design_matrix(  # noqa: C901, PLR0912
         required = required_by_finish.get(cast("str", finish))
         if required is None or required not in refs:
             _fail(f"missing-applicable-terminal-citation:{case_id}")
-        if _contains_none(wire.get("hermes")) and "D-04" not in refs:
+        if "hermes" in wire and _contains_none(wire["hermes"]) and "D-04" not in refs:
             _fail(f"missing-null-citation:{case_id}")
         disposition = expected.get("disposition")
         if disposition == "accept":
@@ -491,6 +533,7 @@ def _verify_design_matrix(  # noqa: C901, PLR0912
                 _fail(f"missing-public-event:{case_id}")
             if set(public_event) != {"outcome", "partial", "failure_reason"}:
                 _fail(f"invalid-public-event:{case_id}")
+            _verify_accepted_public_event(case_id, wire, public_event)
         elif disposition == "reject":
             if expected.get("error") != "HermesProtocolError":
                 _fail(f"invalid-rejection:{case_id}")

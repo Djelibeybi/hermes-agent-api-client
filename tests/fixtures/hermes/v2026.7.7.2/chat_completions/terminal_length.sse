@@ -1,0 +1,3 @@
+data: {"id": "chatcmpl-phase2-length", "object": "chat.completion.chunk", "created": 1784246400, "model": "hermes-agent", "choices": [{"index": 0, "delta": {}, "finish_reason": "length"}], "usage": {"prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12}, "error": {"message": "phase2-raw-length-error-canary", "type": "agent_error"}, "hermes": {"completed": false, "partial": true, "failed": false, "error": "phase2-raw-length-error-canary", "error_code": "output_truncated"}}
+
+data: [DONE]
