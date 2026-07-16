@@ -6,7 +6,10 @@ import io
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
+from email.parser import BytesParser
+from email.policy import default
 from importlib.metadata import metadata, version
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -50,20 +53,53 @@ def built_distributions() -> tuple[Path, Path]:
 
 def _run_distribution_verifier(
     *archives: Path,
+    verifier_root: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the standalone distribution verifier with captured output."""
     project_root = Path(__file__).parents[1]
+    verifier_project_root = verifier_root or project_root
     return subprocess.run(  # noqa: S603
         [
             sys.executable,
-            str(project_root / "scripts" / "verify_dist.py"),
+            str(verifier_project_root / "scripts" / "verify_dist.py"),
             *(str(archive) for archive in archives),
         ],
-        cwd=project_root,
+        cwd=verifier_project_root,
         check=False,
         capture_output=True,
         text=True,
     )
+
+
+def _create_verifier_project(
+    temporary_root: Path,
+    project_contents: str,
+) -> Path:
+    """Copy the verifier beside controlled project metadata."""
+    project_root = Path(__file__).parents[1]
+    verifier_root = temporary_root / "verifier-project"
+    scripts_root = verifier_root / "scripts"
+    scripts_root.mkdir(parents=True)
+    (scripts_root / "verify_dist.py").write_bytes(
+        (project_root / "scripts" / "verify_dist.py").read_bytes()
+    )
+    (verifier_root / "pyproject.toml").write_text(project_contents)
+    return verifier_root
+
+
+def _wheel_metadata_version(wheel_path: Path) -> str:
+    """Read the sole Version field from a built wheel."""
+    with zipfile.ZipFile(wheel_path) as wheel:
+        metadata_names = tuple(
+            name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")
+        )
+        assert len(metadata_names) == 1
+        package_metadata = BytesParser(policy=default).parsebytes(
+            wheel.read(metadata_names[0])
+        )
+    version_values = package_metadata.get_all("Version", [])
+    assert len(version_values) == 1
+    return version_values[0]
 
 
 def _assert_verifier_rejection(
@@ -151,8 +187,8 @@ def _duplicate_metadata_field(payload: bytes, field: str, value: str) -> bytes:
 
 def test_distribution_metadata_and_typed_marker() -> None:
     """Distribution metadata identifies a typed Python 3.13 package."""
-    assert version("hermes-agent-api-client") == "0.1.0"
     package_metadata = metadata("hermes-agent-api-client")
+    assert package_metadata["Version"] == version("hermes-agent-api-client")
     assert package_metadata["Requires-Python"] == ">=3.13"
     assert package_metadata["License-Expression"] == "UPL-1.0"
 
@@ -160,11 +196,11 @@ def test_distribution_metadata_and_typed_marker() -> None:
     assert (package_root / "py.typed").is_file()
 
 
-def test_public_version_is_static() -> None:
-    """The import package exposes its static distribution version."""
+def test_public_version_matches_distribution_metadata() -> None:
+    """The import package exposes its installed distribution version."""
     import hermes_agent_api_client  # noqa: PLC0415
 
-    assert hermes_agent_api_client.__version__ == "0.1.0"
+    assert hermes_agent_api_client.__version__ == version("hermes-agent-api-client")
 
 
 def test_public_exports_are_exact() -> None:
@@ -175,10 +211,12 @@ def test_public_exports_are_exact() -> None:
         "AssistantDeltaEvent",
         "HermesAgentApiClient",
         "HermesAuthenticationError",
+        "HermesCapabilityError",
         "HermesCapabilities",
         "HermesContractError",
         "HermesEvent",
         "HermesHttpStatusError",
+        "HermesIdentityError",
         "HermesProtocolError",
         "HermesTransportError",
         "KeepaliveEvent",
@@ -188,6 +226,20 @@ def test_public_exports_are_exact() -> None:
         "UsageEvent",
         "__version__",
     }
+
+
+def test_public_failure_types_are_available_through_star_import() -> None:
+    """Star imports expose the public protocol failure taxonomy."""
+    namespace: dict[str, object] = {}
+    exec("from hermes_agent_api_client import *", namespace)  # noqa: S102
+    identity_type = namespace["HermesIdentityError"]
+    capability_type = namespace["HermesCapabilityError"]
+    protocol_type = namespace["HermesProtocolError"]
+    assert isinstance(identity_type, type)
+    assert isinstance(capability_type, type)
+    assert isinstance(protocol_type, type)
+    assert issubclass(identity_type, protocol_type)
+    assert issubclass(capability_type, protocol_type)
 
 
 def test_distribution_archives_contain_only_release_files(
@@ -251,6 +303,82 @@ def test_distribution_verifier_accepts_release_archives(
     assert result.returncode == 0
     assert result.stdout == "distribution verification passed\n"
     assert result.stderr == ""
+
+
+def test_distribution_verifier_uses_current_project_version(
+    built_distributions: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    """A semantic-release stamp drives the expected artifact Version."""
+    project_root = Path(__file__).parents[1]
+    with (project_root / "pyproject.toml").open("rb") as project_file:
+        project_data = tomllib.load(project_file)
+    source_version = project_data["project"]["version"]
+
+    wheel_path, sdist_path = built_distributions
+    assert _wheel_metadata_version(wheel_path) == source_version
+
+    stamped_version = "9876.5.4" if source_version != "9876.5.4" else "9876.5.3"
+    verifier_root = _create_verifier_project(
+        tmp_path,
+        f'[project]\nversion = "{stamped_version}"\n',
+    )
+    stamped_wheel = tmp_path / "stamped.whl"
+
+    def transform(name: str, payload: bytes) -> bytes:
+        if name.endswith(".dist-info/METADATA"):
+            return _replace_metadata_field(
+                payload,
+                "Version",
+                stamped_version,
+            )
+        return payload
+
+    _write_wheel_variant(wheel_path, stamped_wheel, transform=transform)
+    assert _wheel_metadata_version(stamped_wheel) == stamped_version
+
+    result = _run_distribution_verifier(
+        stamped_wheel,
+        sdist_path,
+        verifier_root=verifier_root,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "distribution verification passed\n"
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "project_contents",
+    [
+        '[project]\nversion = "project-version-secret-canary\n',
+        '[project]\nname = "project-version-secret-canary"\n',
+        '[project]\nversion = ["project-version-secret-canary"]\n',
+        '[project]\nversion = ""\n# project-version-secret-canary\n',
+    ],
+    ids=["malformed-toml", "missing-version", "non-string-version", "empty-version"],
+)
+def test_distribution_verifier_hides_invalid_project_version(
+    built_distributions: tuple[Path, Path],
+    tmp_path: Path,
+    project_contents: str,
+) -> None:
+    """Invalid source metadata fails with one constant, secret-free message."""
+    wheel_path, sdist_path = built_distributions
+    canary = "project-version-secret-canary"
+    verifier_root = _create_verifier_project(tmp_path, project_contents)
+
+    result = _run_distribution_verifier(
+        wheel_path,
+        sdist_path,
+        verifier_root=verifier_root,
+    )
+
+    _assert_verifier_rejection(
+        result,
+        expected_message=_INVALID_METADATA_MESSAGE,
+        canary=canary,
+    )
 
 
 def test_distribution_verifier_requires_one_archive_of_each_kind(

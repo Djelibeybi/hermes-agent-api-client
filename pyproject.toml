@@ -53,6 +53,7 @@ allow_zero_version = true
 build_command = """
   uv lock --upgrade-package "$PACKAGE_NAME"
   uv build
+  uv run --no-sync python scripts/verify_dist.py dist/*.whl dist/*.tar.gz
 """
 commit_message = "chore(release): {version} [skip ci]\n\nSigned-off-by: Avi Miller <me@dje.li>"
 major_on_zero = false
