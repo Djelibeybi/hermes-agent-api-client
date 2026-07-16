@@ -40,19 +40,26 @@ The planner assigns final task IDs. Every requirement below must remain attached
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| planner-assigned | TBD | TBD | TOOL-01 | T-02-01 | Exact immutable public enum/model contract | unit/static | `uv run --no-sync pytest tests/test_protocol.py tests/test_package.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| planner-assigned | TBD | TBD | TOOL-02 | T-02-02 | Ordered correlated records remain facts, without synthetic tracking | async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| planner-assigned | TBD | TBD | TOOL-03 | T-02-01 | Approved duplicate/malformed keys fail closed | async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| planner-assigned | TBD | TBD | TOOL-04 | T-02-03 | Raw/additive tool data never enters public state, errors, or frames | security unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| planner-assigned | TBD | TBD | TERM-01 | T-02-01 | Closed immutable terminal vocabulary | unit/static | `uv run --no-sync pytest tests/test_protocol.py tests/test_package.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| planner-assigned | TBD | TBD | TERM-02 | T-02-04 | Only the approved stop matrix maps to success | parameterized async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| planner-assigned | TBD | TBD | TERM-03 | T-02-04 | Only the approved length matrix maps to truncation | parameterized async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| planner-assigned | TBD | TBD | TERM-04 | T-02-04 | Exact partial and bounded safe error-code mapping | parameterized async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| planner-assigned | TBD | TBD | TERM-05 | T-02-01, T-02-04 | Duplicates, nulls, and contradictions are never normalized | property-style parameterized unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| planner-assigned | TBD | TBD | TERM-06 | T-02-03 | Raw errors remain private; transport and cancellation classifications remain exact | security/regression | `uv run --no-sync pytest tests/test_sse.py tests/test_transport.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| planner-assigned | TBD | TBD | TERM-07 | T-02-05 | Terminal observation follows suffix validation and cleanup | async integration/regression | `uv run --no-sync pytest tests/test_sse.py tests/test_transport.py --no-cov -q` | ✅ extend existing | ⬜ pending |
+| 02-01-feature | 02-01 | 1 | TOOL-01 | T-02-01 | Exact immutable public enum/model contract and coherent current SSE construction | unit/static/regression | `uv run --no-sync pytest tests/test_protocol.py tests/test_package.py tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
+| 02-03-feature | 02-03 | 2 | TOOL-02 | T-02-02 | Ordered correlated records remain facts, without synthetic tracking | async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
+| 02-03-feature | 02-03 | 2 | TOOL-03 | T-02-01 | Approved duplicate/malformed keys fail closed before recursive pair materialization | async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
+| 02-03-feature | 02-03 | 2 | TOOL-04 | T-02-03 | Raw/additive tool data never enters public state, errors, or frames | security unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
+| 02-01-feature | 02-01 | 1 | TERM-01 | T-02-01 | Closed immutable terminal vocabulary | unit/static | `uv run --no-sync pytest tests/test_protocol.py tests/test_package.py tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
+| 02-04-feature | 02-04 | 3 | TERM-02 | T-02-04 | Only the approved stop matrix maps to success; absent finish reason differs from explicit null | parameterized async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
+| 02-04-feature | 02-04 | 3 | TERM-03 | Only the approved length matrix maps to truncation | parameterized async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
+| 02-04-feature | 02-04 | 3 | TERM-04 | Exact UPSTREAM_ERROR outcome, partial, and bounded safe error-code mapping | parameterized async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
+| 02-04-feature | 02-04 | 3 | TERM-05 | T-02-01, T-02-04 | Duplicates, nulls, and contradictions are never normalized | property-style parameterized unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
+| 02-04-feature | 02-04 | 3 | TERM-06 | T-02-03 | Raw errors remain private; transport and cancellation classifications remain exact | security/regression | `uv run --no-sync pytest tests/test_sse.py tests/test_transport.py --no-cov -q` | ✅ extend existing | ⬜ pending |
+| 02-04-feature | 02-04 | 3 | TERM-07 | T-02-05 | Terminal observation follows suffix validation and cleanup | async integration/regression | `uv run --no-sync pytest tests/test_sse.py tests/test_transport.py --no-cov -q` | ✅ extend existing | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+
+Evidence-task verification is also assigned explicitly:
+
+| Task ID | Plan | Wave | Contract Gate | Automated Command | Status |
+|---------|------|------|---------------|-------------------|--------|
+| 02-02-task-1 | 02-02 | 1 | D-15/D-16 canonical peel, network disposition, and conditional newer-tag comparison | `uv run --no-sync python scripts/check_phase2_provenance.py --scope release-and-tool` | ⬜ pending |
+| 02-02-task-2 | 02-02 | 1 | D-01-D-04/D-09-D-14 terminal evidence, per-row citations, provenance, and hashes | `uv run --no-sync python scripts/check_phase2_provenance.py --scope terminal` | ⬜ pending |
 
 Threat references:
 
@@ -67,7 +74,8 @@ Threat references:
 ## Wave 0 Requirements
 
 - [ ] Add immutable running/completed and terminal evidence fixtures under `tests/fixtures/hermes/v2026.7.7.2/chat_completions/` with SHA-256 provenance entries distinguishing tag-source-derived from design-derived cases.
-- [ ] Add raw duplicate-member inputs as bytes/text because Python dictionaries cannot represent duplicate JSON members.
+- [ ] Add `scripts/check_phase2_provenance.py` and use it for canonical peel, exact `latest-tag-verification-blocked`, conditional newer-tag ownership/difference evidence, per-row D-01 through D-04 citations, and per-path hashes.
+- [ ] Add the deterministic raw duplicate-member bytes/text helper in `tests/helpers/hermes.py` because Python dictionaries cannot represent duplicate JSON members.
 - [ ] Extend `tests/test_protocol.py` and `tests/test_package.py` for direct-construction, exact-bound, enum, and export cases.
 - [ ] Extend `tests/test_sse.py` for the exhaustive tool/terminal matrix, secrecy canaries, repetition, interruption, and ordering cases.
 - [ ] Extend `tests/test_transport.py` only where the outer response-cleanup gate requires coverage.
@@ -77,7 +85,7 @@ Threat references:
 
 ## Manual-Only Verifications
 
-All Phase 2 behaviors have automated verification. The implementation must repeat the latest Hermes numeric-tag check before coding; a newer incompatible tagged envelope is a blocking contract decision rather than a manual acceptance test.
+All normal Phase 2 behaviors have automated verification. The implementation must repeat the latest Hermes numeric-tag check before coding. Network failure records `latest-tag-verification-blocked`; an incompatible or ambiguous newer tagged envelope stops at a blocking human contract-decision checkpoint rather than becoming a guessed mapping.
 
 ---
 
