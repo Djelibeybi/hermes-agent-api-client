@@ -1,8 +1,17 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "hermes_release": "v2026.7.7.2",
   "source_repository": "https://github.com/NousResearch/hermes-agent",
   "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+  "release_verification": {
+    "checked_at": "2026-07-17",
+    "canonical_tag": "v2026.7.7.2",
+    "canonical_tag_object": "b7751df34688835a108e0d630f3495fc11f3df79",
+    "canonical_peeled_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+    "observed_latest_numeric_tag": "v2026.7.7.2",
+    "observed_latest_peeled_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+    "compatibility_disposition": "canonical-current"
+  },
   "evidence_scope": {
     "contract": "isolated-hermes-client",
     "claims": [
@@ -88,6 +97,61 @@
         "tool progress and keepalive records remain non-content events",
         "usage accompanies the stop finish record",
         "DONE follows the finish record as Hermes framing confirmation"
+      ]
+    },
+    {
+      "path": "chat_completions/tool_progress_pair.sse",
+      "sha256": "eef58feb5177e66e56fa44f3a5b3cc9d72ae0b1f889c6f4c9a6e25dd3501214a",
+      "hermes_release": "v2026.7.7.2",
+      "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+      "evidence_date": "2026-07-17",
+      "purpose": "Immutable source-derived sequence proving ordered running and completed records with one correlated tool call ID.",
+      "fixture_kind": "chat-completions-sse",
+      "evidence_kind": "tag-source-derived",
+      "source_refs": [
+        {
+          "repository": "https://github.com/NousResearch/hermes-agent",
+          "commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+          "path": "gateway/platforms/api_server.py",
+          "line_start": 2220,
+          "line_end": 2260,
+          "anchor_sha256": "50711f007831d6acd33b5c3ca8035ce8b0bce4bd0e119d29a25f50adbb0cd5ae",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/9de9c25f620ff7f1ce0fd5457d596052d5159596/gateway/platforms/api_server.py#L2220-L2260"
+        },
+        {
+          "repository": "https://github.com/NousResearch/hermes-agent",
+          "commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
+          "path": "tests/gateway/test_api_server.py",
+          "line_start": 1397,
+          "line_end": 1471,
+          "anchor_sha256": "3388dcd320b0bbbe25be718508c2858a2ff904dec80e471b5e8cc17bfa18f770",
+          "url": "https://github.com/NousResearch/hermes-agent/blob/9de9c25f620ff7f1ce0fd5457d596052d5159596/tests/gateway/test_api_server.py#L1397-L1471"
+        }
+      ],
+      "reproduction": {
+        "mode": "detached-tag-source-derivation",
+        "procedure": [
+          "Enumerate official numeric tags and independently verify that annotated tag v2026.7.7.2 peels to commit 9de9c25f620ff7f1ce0fd5457d596052d5159596.",
+          "Detach the upstream tree at that commit and inspect the tool start and completion emission branches plus their correlated lifecycle regression test.",
+          "Preserve the exact tag-shaped running and completed objects in source order with one toolCallId, then append a valid stop chunk and DONE marker.",
+          "Hash the complete immutable LF-delimited byte sequence."
+        ],
+        "configuration": {
+          "tool": "terminal",
+          "tool_call_id": "call_terminal_1",
+          "statuses": [
+            "running",
+            "completed"
+          ],
+          "live_server_invoked": false
+        }
+      },
+      "semantic_assertions": [
+        "running precedes completed",
+        "both lifecycle records carry toolCallId call_terminal_1",
+        "both lifecycle records name the terminal tool",
+        "emoji and label occur only on the running record where tagged source emits them",
+        "a valid stop chunk and DONE marker complete the evidence sequence"
       ]
     }
   ]
