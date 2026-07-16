@@ -420,7 +420,10 @@ def _verify_tool_fixture(path: Path) -> None:
 
 
 def _verify_terminal_sse(path: Path, expected: Mapping[str, object]) -> None:
-    records = _sse_data(path.read_bytes())
+    payload = path.read_bytes()
+    if not payload.endswith(b"\n\n"):
+        _fail(f"unterminated-terminal-fixture:{path.name}")
+    records = _sse_data(payload)
     if len(records) != _TERMINAL_RECORD_COUNT or records[1] != (None, "[DONE]"):
         _fail(f"invalid-terminal-fixture:{path.name}")
     document = _json_object(records[0][1])

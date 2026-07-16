@@ -117,11 +117,33 @@ class _CapabilityFailureKind(StrEnum):
     PROTOCOL = "protocol"
 
 
+_MISSING_JSON_MEMBER = object()
+
+
 @dataclass(frozen=True, slots=True)
 class _JsonObjectPairs:
     """One JSON object whose ordered members retain duplicate-name evidence."""
 
     pairs: tuple[tuple[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _TerminalMetadata:
+    """Sanitized root-Hermes lifecycle facts with explicit presence state."""
+
+    root_present: bool
+    completed: object = _MISSING_JSON_MEMBER
+    failed: object = _MISSING_JSON_MEMBER
+    partial: object = _MISSING_JSON_MEMBER
+    error_code: object = _MISSING_JSON_MEMBER
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectedChatChunk:
+    """Materialized chat data paired with sanitized terminal metadata."""
+
+    document: dict[str, object]
+    terminal_metadata: _TerminalMetadata
 
 
 def _json_object_pairs_hook(  # pyright: ignore[reportUnusedFunction]
@@ -165,8 +187,33 @@ def _last_member_value(value: _JsonObjectPairs, member_name: str) -> object:
     return result
 
 
-_MISSING_JSON_MEMBER = object()
 _TOOL_PROGRESS_MEMBERS = frozenset(("toolCallId", "tool", "status"))
+_TERMINAL_METADATA_MEMBERS = frozenset(("completed", "failed", "partial", "error_code"))
+
+
+def _project_terminal_metadata(value: object) -> _TerminalMetadata | None:
+    """Validate and retain only approved root-Hermes lifecycle facts."""
+    if value is _MISSING_JSON_MEMBER:
+        return _TerminalMetadata(root_present=False)
+    if not isinstance(value, _JsonObjectPairs):
+        return None
+
+    projected: dict[str, object] = {}
+    for name, member_value in value.pairs:
+        if name not in _TERMINAL_METADATA_MEMBERS:
+            continue
+        if name in projected:
+            return None
+        if name == "error_code":
+            try:
+                projected[name] = _require_lifecycle_text(member_value)
+            except ValueError:
+                return None
+        else:
+            if type(member_value) is not bool:
+                return None
+            projected[name] = member_value
+    return _TerminalMetadata(root_present=True, **projected)
 
 
 def _project_tool_progress_object(  # pyright: ignore[reportUnusedFunction]
@@ -191,11 +238,15 @@ def _project_tool_progress_object(  # pyright: ignore[reportUnusedFunction]
 
 def _project_chat_chunk_object(  # pyright: ignore[reportUnusedFunction]
     value: object,
-) -> dict[str, object] | None:
-    """Check approved chat duplicates, then materialize the complete wire tree."""
+) -> _ProjectedChatChunk | None:
+    """Project terminal facts, then materialize the additive chat wire tree."""
     if not isinstance(value, _JsonObjectPairs):
         return None
     if _has_duplicate_member(value, "hermes"):
+        return None
+
+    terminal_metadata = _project_terminal_metadata(_last_member_value(value, "hermes"))
+    if terminal_metadata is None:
         return None
 
     choices = _last_member_value(value, "choices")
@@ -208,10 +259,17 @@ def _project_chat_chunk_object(  # pyright: ignore[reportUnusedFunction]
         return None
 
     try:
-        materialized = _materialize_json_value(value)
+        materialized = {
+            name: _materialize_json_value(member_value)
+            for name, member_value in value.pairs
+            if name != "hermes"
+        }
     except RecursionError:
         return None
-    return cast("dict[str, object]", materialized)
+    return _ProjectedChatChunk(
+        document=materialized,
+        terminal_metadata=terminal_metadata,
+    )
 
 
 def _raise_capability_failure(kind: _CapabilityFailureKind) -> Never:

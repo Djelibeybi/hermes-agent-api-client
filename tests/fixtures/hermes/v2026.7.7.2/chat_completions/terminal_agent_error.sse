@@ -1,3 +1,4 @@
 data: {"id": "chatcmpl-phase2-agent-error", "object": "chat.completion.chunk", "created": 1784246400, "model": "hermes-agent", "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}], "usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10}, "error": {"message": "phase2-raw-agent-error-canary", "type": "agent_error"}, "hermes": {"completed": false, "partial": false, "failed": true, "error": "phase2-raw-agent-error-canary", "error_code": "agent_error"}}
 
 data: [DONE]
+

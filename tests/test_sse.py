@@ -284,7 +284,7 @@ def _terminal_record(
     extra: dict[str, object] | None = None,
 ) -> bytes:
     """Build one terminal candidate while preserving field omission."""
-    choice: dict[str, object] = {"delta": {}}
+    choice: dict[str, object] = {"delta": {"role": "assistant"}}
     if finish_reason is not _OMITTED:
         choice["finish_reason"] = finish_reason
     document: dict[str, object] = {"choices": [choice]}
@@ -1133,6 +1133,21 @@ async def test_error_requires_root_hermes_and_present_exact_partial() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("hermes", [None, [], False, "not-an-object"])
+async def test_present_root_hermes_requires_an_exact_json_object(
+    hermes: object,
+) -> None:
+    """A present canonical lifecycle envelope cannot be a coercible lookalike."""
+    with pytest.raises(HermesProtocolError):
+        await _decode(
+            (
+                _terminal_record(finish_reason="stop", hermes=hermes)
+                + _canonical_records()[6],
+            )
+        )
+
+
+@pytest.mark.asyncio
 async def test_finish_reason_omission_differs_from_explicit_null() -> None:
     """A missing choice member fails while explicit null remains nonterminal."""
     missing = _terminal_record()
@@ -1143,6 +1158,14 @@ async def test_finish_reason_omission_differs_from_explicit_null() -> None:
     assert await _decode((explicit_null + _canonical_records()[6],)) == (
         TerminalEvent(outcome=TerminalOutcome.SUCCESS),
     )
+
+    with pytest.raises(HermesProtocolError):
+        await _decode(
+            (
+                _terminal_record(finish_reason=None, hermes={"partial": False})
+                + _canonical_records()[6],
+            )
+        )
 
 
 @pytest.mark.asyncio

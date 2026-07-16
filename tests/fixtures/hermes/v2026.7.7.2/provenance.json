@@ -156,7 +156,7 @@
     },
     {
       "path": "chat_completions/terminal_length.sse",
-      "sha256": "5fb3fd1a952f808b879cb07bb61653e9b1abb09024a04e1a8820936882813009",
+      "sha256": "fae588ae1f37cc6ad695b17024ccb9da7b921585a86491ad4a704084fc236f70",
       "hermes_release": "v2026.7.7.2",
       "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
       "evidence_date": "2026-07-17",
@@ -210,7 +210,7 @@
     },
     {
       "path": "chat_completions/terminal_agent_error.sse",
-      "sha256": "f448a514abb837160ccf12e792ca105bb12526da6fdfb76b5403c39ed3e2a9b2",
+      "sha256": "1297a3084179248f5deaed1745a6c91ad948d27b126c5ff641571e39edab56b9",
       "hermes_release": "v2026.7.7.2",
       "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
       "evidence_date": "2026-07-17",
@@ -255,7 +255,7 @@
     },
     {
       "path": "chat_completions/terminal_task_exception_contradiction.sse",
-      "sha256": "45c7ef26b2e61540b10ce471c395e93e1b0c591a1dc4141337e1c66e6ec8d8ef",
+      "sha256": "4eac02e13babe10e9b957d38f460e081d65f4e99bbfc4fea3772f58fc40cb6c6",
       "hermes_release": "v2026.7.7.2",
       "source_commit": "9de9c25f620ff7f1ce0fd5457d596052d5159596",
       "evidence_date": "2026-07-17",

@@ -12,12 +12,14 @@ from .models import (
     HermesEvent,
     KeepaliveEvent,
     TerminalEvent,
+    TerminalFailureReason,
     TerminalOutcome,
     ToolProgressEvent,
     ToolProgressStatus,
     UsageEvent,
 )
 from .protocol import (
+    _MISSING_JSON_MEMBER,  # pyright: ignore[reportPrivateUsage]
     HermesProtocolError,
     HermesTransportError,
     _json_object_pairs_hook,  # pyright: ignore[reportPrivateUsage]
@@ -25,6 +27,7 @@ from .protocol import (
     _parse_tool_progress,  # pyright: ignore[reportPrivateUsage]
     _project_chat_chunk_object,  # pyright: ignore[reportPrivateUsage]
     _project_tool_progress_object,  # pyright: ignore[reportPrivateUsage]
+    _TerminalMetadata,  # pyright: ignore[reportPrivateUsage]
 )
 
 if TYPE_CHECKING:
@@ -37,6 +40,7 @@ MAX_PENDING_BYTES = 262_144
 MAX_EVENT_DATA_CHARS = 65_536
 _CR = 0x0D
 _LF = 0x0A
+_TERMINAL_MAPPING_FAILURE = object()
 
 
 @runtime_checkable
@@ -95,6 +99,72 @@ def _decode_utf8_safely(
         return (False, "")
 
 
+def _map_terminal_event(  # noqa: PLR0911 - closed total matrix exits per row
+    finish_reason: str | None,
+    metadata: _TerminalMetadata,
+) -> TerminalEvent | None | object:
+    """Map only the locked total terminal rows into closed public values."""
+    missing = _MISSING_JSON_MEMBER
+    if finish_reason is None:
+        if any(
+            value is not missing
+            for value in (
+                metadata.completed,
+                metadata.failed,
+                metadata.partial,
+                metadata.error_code,
+            )
+        ):
+            return _TERMINAL_MAPPING_FAILURE
+        return None
+
+    if finish_reason == "stop":
+        if (
+            metadata.completed not in (missing, True)
+            or metadata.failed not in (missing, False)
+            or metadata.partial not in (missing, False)
+            or metadata.error_code is not missing
+        ):
+            return _TERMINAL_MAPPING_FAILURE
+        return TerminalEvent(
+            outcome=TerminalOutcome.SUCCESS,
+            partial=False,
+            failure_reason=None,
+        )
+
+    if finish_reason == "length":
+        if (
+            metadata.completed not in (missing, False)
+            or metadata.failed not in (missing, False)
+            or metadata.partial not in (missing, True)
+            or metadata.error_code not in (missing, "output_truncated")
+        ):
+            return _TERMINAL_MAPPING_FAILURE
+        return TerminalEvent(
+            outcome=TerminalOutcome.LENGTH,
+            partial=True,
+            failure_reason=TerminalFailureReason.OUTPUT_TRUNCATED,
+        )
+
+    if (
+        not metadata.root_present
+        or metadata.completed not in (missing, False)
+        or metadata.failed not in (missing, True)
+        or metadata.partial is missing
+    ):
+        return _TERMINAL_MAPPING_FAILURE
+    failure_reason = (
+        TerminalFailureReason.AGENT_ERROR
+        if metadata.error_code in (missing, "agent_error")
+        else TerminalFailureReason.UNKNOWN
+    )
+    return TerminalEvent(
+        outcome=TerminalOutcome.UPSTREAM_ERROR,
+        partial=cast("bool", metadata.partial),
+        failure_reason=failure_reason,
+    )
+
+
 def _decode_application_record(  # noqa: C901, PLR0911 - invalid wire shapes exit locally
     event_name: str | None,
     data: str,
@@ -126,13 +196,22 @@ def _decode_application_record(  # noqa: C901, PLR0911 - invalid wire shapes exi
     document = None
     if projected is None:
         return None
-    chunk = _parse_chat_chunk(projected)
+    chat_document = projected.document
+    terminal_metadata = projected.terminal_metadata
     projected = None
+    chunk = _parse_chat_chunk(chat_document)
+    chat_document = None
     if chunk is None:
+        terminal_metadata = None
         return None
     choice = chunk.choices[0]
     delta = choice.delta
     finish_reason = choice.finish_reason
+    terminal_event = _map_terminal_event(finish_reason, terminal_metadata)
+    terminal_metadata = None
+    if terminal_event is _TERMINAL_MAPPING_FAILURE:
+        terminal_event = None
+        return None
 
     events: list[HermesEvent] = []
     role = delta.role
@@ -150,14 +229,8 @@ def _decode_application_record(  # noqa: C901, PLR0911 - invalid wire shapes exi
             )
         )
 
-    terminal_outcome = {
-        None: None,
-        "stop": TerminalOutcome.SUCCESS,
-        "length": TerminalOutcome.LENGTH,
-        "error": TerminalOutcome.UPSTREAM_ERROR,
-    }[finish_reason]
-    if terminal_outcome is not None:
-        events.append(TerminalEvent(outcome=terminal_outcome))
+    if isinstance(terminal_event, TerminalEvent):
+        events.append(terminal_event)
 
     if not events and role != "assistant":
         return None
