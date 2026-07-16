@@ -69,37 +69,37 @@ Deferred until a later evidence-backed client milestone.
 
 ## Traceability
 
-Roadmap phase mappings are populated after roadmap approval.
+Each active requirement maps to exactly one v0.3.0 roadmap phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SESS-01 | TBD | Pending |
-| SESS-02 | TBD | Pending |
-| SESS-03 | TBD | Pending |
-| SESS-04 | TBD | Pending |
-| SESS-05 | TBD | Pending |
-| HTTP-02 | TBD | Pending |
-| TOOL-01 | TBD | Pending |
-| TOOL-02 | TBD | Pending |
-| TOOL-03 | TBD | Pending |
-| TOOL-04 | TBD | Pending |
-| TERM-01 | TBD | Pending |
-| TERM-02 | TBD | Pending |
-| TERM-03 | TBD | Pending |
-| TERM-04 | TBD | Pending |
-| TERM-05 | TBD | Pending |
-| TERM-06 | TBD | Pending |
-| TERM-07 | TBD | Pending |
-| SECU-02 | TBD | Pending |
-| VERI-02 | TBD | Pending |
-| PKG-02 | TBD | Pending |
-| DEPS-01 | TBD | Pending |
+| SESS-01 | Phase 3 | Pending |
+| SESS-02 | Phase 3 | Pending |
+| SESS-03 | Phase 3 | Pending |
+| SESS-04 | Phase 3 | Pending |
+| SESS-05 | Phase 3 | Pending |
+| HTTP-02 | Phase 3 | Pending |
+| TOOL-01 | Phase 2 | Pending |
+| TOOL-02 | Phase 2 | Pending |
+| TOOL-03 | Phase 2 | Pending |
+| TOOL-04 | Phase 2 | Pending |
+| TERM-01 | Phase 2 | Pending |
+| TERM-02 | Phase 2 | Pending |
+| TERM-03 | Phase 2 | Pending |
+| TERM-04 | Phase 2 | Pending |
+| TERM-05 | Phase 2 | Pending |
+| TERM-06 | Phase 2 | Pending |
+| TERM-07 | Phase 2 | Pending |
+| SECU-02 | Phase 4 | Pending |
+| VERI-02 | Phase 4 | Pending |
+| PKG-02 | Phase 4 | Pending |
+| DEPS-01 | Phase 4 | Pending |
 
 **Coverage:**
 - v0.3.0 requirements: 21 total
-- Mapped to phases: 0
-- Unmapped: 21
+- Mapped to phases: 21
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-07-17*
-*Last updated: 2026-07-17 after v0.3.0 research*
+*Last updated: 2026-07-17 after v0.3.0 roadmap creation*

@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v0.3.0
 milestone_name: Conversation Contract
 status: planning
-last_updated: "2026-07-16T17:29:50.919Z"
-last_activity: 2026-07-16
+last_updated: "2026-07-17T03:50:13+10:00"
+last_activity: 2026-07-17
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -15,16 +15,46 @@ progress:
 
 # Project State
 
-Milestone v0.3.0 defines the approved Conversation Contract work requested by
-the Hermes Conversation integration.
+## Project Reference
+
+See: `.planning/PROJECT.md` (updated 2026-07-17)
+
+**Core value:** Python consumers can use a typed, bounded, secret-safe asynchronous client for the documented Hermes Agent API Server boundary without implementing protocol or transport behaviour themselves.
+**Current focus:** Phase 2 — Conversation Event Contract
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-07-16 — Milestone v0.3.0 started
+Phase: 2 of 4 (Conversation Event Contract)
+Plan: Not planned
+Status: Ready to plan
+Last activity: 2026-07-17 — v0.3.0 roadmap created with 21/21 requirements mapped
 
-## Operator Next Steps
+Progress: [░░░░░░░░░░] 0%
 
-- Define v0.3.0 requirements and create its roadmap.
+## Accumulated Context
+
+### Decisions
+
+- Phase numbering continues from the completed historical Phase 1 baseline.
+- Lifecycle IDs, names, and safe error codes are bounded at 256 characters.
+- Visible ASCII means `0x21..0x7e`; duplicate approved lifecycle keys and contradictory terminal metadata fail closed.
+- The client transports opaque bounded facts; Home Assistant identity derivation and policy remain out of scope.
+
+### Historical Context
+
+- v0.1.0 was imported as published baseline evidence and is preserved under `.planning/milestones/`.
+
+### Pending Todos
+
+None yet.
+
+### Blockers/Concerns
+
+- Phase 2 planning must freeze tagged terminal coexistence fixtures before implementing the mapping.
+- Phase 4 must re-check latest compatible dependency versions before refreshing the lockfile.
+
+## Session Continuity
+
+Last session: 2026-07-17
+Stopped at: Roadmap created; Phase 2 is ready to plan
+Resume file: None
