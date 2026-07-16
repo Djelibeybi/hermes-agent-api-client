@@ -25,12 +25,15 @@ Icon
 ._*
 
 # IntelliJ IDEA
-.idea
+.idea/
 *.iml
 
-# pytest
+# pytest and project tooling
 .pytest_cache
 .cache
+.ruff_cache/
+.superpowers/
+.worktrees/
 
 # GITHUB Proposed Python stuff:
 *.py[cod]
@@ -92,7 +95,6 @@ pip-selfcheck.json
 venv
 .venv
 Pipfile*
-uv.lock
 share/*
 /Scripts/
 
@@ -144,4 +146,3 @@ pytest_buckets.txt
 .claude/settings.local.json
 .claude/worktrees/
 .serena/
-
