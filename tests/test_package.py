@@ -348,6 +348,25 @@ def test_distribution_verifier_uses_current_project_version(
     assert result.stderr == ""
 
 
+def test_semantic_release_commits_the_stamped_lockfile() -> None:
+    """The release commit includes the lockfile updated by the build command."""
+    project_root = Path(__file__).parents[1]
+    with (project_root / "pyproject.toml").open("rb") as project_file:
+        semantic_release = tomllib.load(project_file)["tool"]["semantic_release"]
+
+    assert semantic_release["version_toml"] == [
+        "pyproject.toml:project.version",
+    ]
+    assert [
+        command.strip() for command in semantic_release["build_command"].splitlines()
+    ] == [
+        'uv lock --upgrade-package "$PACKAGE_NAME"',
+        "uv build",
+        "uv run --no-sync python scripts/verify_dist.py dist/*.whl dist/*.tar.gz",
+    ]
+    assert semantic_release["assets"] == ["uv.lock"]
+
+
 @pytest.mark.parametrize(
     "project_contents",
     [

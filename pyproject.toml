@@ -50,6 +50,7 @@ source-include = ["uv.lock"]
 
 [tool.semantic_release]
 allow_zero_version = true
+assets = ["uv.lock"]
 build_command = """
   uv lock --upgrade-package "$PACKAGE_NAME"
   uv build

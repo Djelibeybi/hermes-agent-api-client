@@ -779,6 +779,7 @@ Build `_EXPECTED_SINGLETON_METADATA` with `"Version": _project_version()` after 
 Update semantic-release's build command to verify stamped artifacts:
 
 ```toml
+assets = ["uv.lock"]
 build_command = """
   uv lock --upgrade-package "$PACKAGE_NAME"
   uv build
@@ -787,6 +788,9 @@ build_command = """
 ```
 
 Semantic-release supplies `PACKAGE_NAME`, stamps `version_toml` before this command, and aborts before commit/tag creation if verification fails.
+The build command updates the stamped package entry in `uv.lock`; listing the
+lockfile in `assets` ensures semantic-release stages it in the release commit
+when `commit_all` remains disabled.
 
 - [x] **Step 6: Run package, build, verifier, and public type gates GREEN**
 
