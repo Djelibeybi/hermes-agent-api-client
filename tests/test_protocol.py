@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any, cast, get_args
 import pytest
 from pydantic import ValidationError
 
+import hermes_agent_api_client as hermes_api
+import hermes_agent_api_client.models as hermes_models
 from hermes_agent_api_client import (
     AssistantDeltaEvent,
     HermesAuthenticationError,
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
 
 _EVENT_RECORD_COUNT = 7
 _MODEL_MAX_LENGTH = 255
+_LIFECYCLE_TEXT_MAX_LENGTH = 256
 _HOSTILE_ACCESS_CANARY = "hostile-mapping-access-canary"
 _HOSTILE_EQUALITY_CANARY = "hostile-string-equality-canary"
 _HOSTILE_ITERATION_CANARY = "hostile-mapping-iteration-canary"
@@ -729,7 +732,11 @@ def test_stream_vocabulary_is_closed_immutable_and_text_safe() -> None:
 
     records = (
         AssistantDeltaEvent(text="hello"),
-        ToolProgressEvent(tool_name="home_assistant", status="running"),
+        ToolProgressEvent(
+            tool_call_id="call-contract-001",
+            tool_name="home_assistant",
+            status=hermes_api.ToolProgressStatus.RUNNING,
+        ),
         UsageEvent(input_tokens=2, output_tokens=3, total_tokens=5),
         KeepaliveEvent(),
         TerminalEvent(outcome=TerminalOutcome.SUCCESS),
@@ -742,6 +749,154 @@ def test_stream_vocabulary_is_closed_immutable_and_text_safe() -> None:
     for record in records:
         with pytest.raises(ValidationError, match="Instance is frozen"):
             record.unplanned = "mutable"  # type: ignore[attr-defined]
+
+
+def test_conversation_event_enums_are_closed_and_stable() -> None:
+    """The public tool and terminal metadata enums expose only approved values."""
+    assert tuple(hermes_api.ToolProgressStatus) == (
+        hermes_api.ToolProgressStatus.RUNNING,
+        hermes_api.ToolProgressStatus.COMPLETED,
+    )
+    assert tuple(hermes_api.TerminalFailureReason) == (
+        hermes_api.TerminalFailureReason.OUTPUT_TRUNCATED,
+        hermes_api.TerminalFailureReason.AGENT_ERROR,
+        hermes_api.TerminalFailureReason.UNKNOWN,
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "!",
+        "~" * _LIFECYCLE_TEXT_MAX_LENGTH,
+        "Call.ID:/Case?Kept=Yes&value_1",
+    ],
+)
+@pytest.mark.parametrize("field", ["tool_call_id", "tool_name"])
+def test_tool_progress_identifiers_accept_exact_visible_ascii_bounds(
+    field: str,
+    value: str,
+) -> None:
+    """Valid lifecycle text is preserved exactly at both public fields."""
+    fields = {
+        "tool_call_id": "call-contract-001",
+        "tool_name": "home_assistant",
+        "status": hermes_api.ToolProgressStatus.RUNNING,
+    }
+    fields[field] = value
+
+    event = ToolProgressEvent.model_validate(fields)
+
+    assert getattr(event, field) == value
+    assert type(getattr(event, field)) is str
+
+
+class _LifecycleStringSubclass(str):
+    """A coercible lifecycle value that the exact-type contract rejects."""
+
+    __slots__ = ()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "x" * (_LIFECYCLE_TEXT_MAX_LENGTH + 1),
+        "contains space",
+        "\t",
+        "line\nbreak",
+        "nul\0byte",
+        "café",
+        _LifecycleStringSubclass("subclass"),
+        b"bytes",
+        7,
+        True,
+    ],
+)
+@pytest.mark.parametrize("field", ["tool_call_id", "tool_name"])
+def test_tool_progress_identifiers_reject_non_contract_values(
+    field: str,
+    value: object,
+) -> None:
+    """Lifecycle identifiers reject type, range, and character lookalikes."""
+    fields: dict[str, object] = {
+        "tool_call_id": "call-contract-001",
+        "tool_name": "home_assistant",
+        "status": hermes_api.ToolProgressStatus.RUNNING,
+    }
+    fields[field] = value
+
+    with pytest.raises(ValidationError):
+        ToolProgressEvent.model_validate(fields)
+
+
+def test_tool_progress_requires_exact_fields_enum_and_immutability() -> None:
+    """The enriched event is a strict frozen three-field public record."""
+    event = ToolProgressEvent(
+        tool_call_id="call-contract-001",
+        tool_name="home_assistant",
+        status=hermes_api.ToolProgressStatus.COMPLETED,
+    )
+
+    assert set(ToolProgressEvent.model_fields) == {
+        "tool_call_id",
+        "tool_name",
+        "status",
+    }
+    assert event.status is hermes_api.ToolProgressStatus.COMPLETED
+    with pytest.raises(ValidationError):
+        ToolProgressEvent(
+            tool_call_id="call-contract-001",
+            tool_name="home_assistant",
+            status="running",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValidationError, match="Instance is frozen"):
+        event.status = hermes_api.ToolProgressStatus.RUNNING
+
+
+def test_terminal_event_defaults_and_strict_metadata_contract() -> None:
+    """Terminal metadata defaults safely and accepts only exact public types."""
+    terminal = TerminalEvent(outcome=TerminalOutcome.SUCCESS)
+    assert terminal == TerminalEvent(
+        outcome=TerminalOutcome.SUCCESS,
+        partial=False,
+        failure_reason=None,
+    )
+    assert set(TerminalEvent.model_fields) == {
+        "outcome",
+        "partial",
+        "failure_reason",
+    }
+
+    failure = TerminalEvent(
+        outcome=TerminalOutcome.UPSTREAM_ERROR,
+        partial=True,
+        failure_reason=hermes_api.TerminalFailureReason.AGENT_ERROR,
+    )
+    assert failure.partial is True
+    assert failure.failure_reason is hermes_api.TerminalFailureReason.AGENT_ERROR
+    with pytest.raises(ValidationError):
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS, partial=1)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        TerminalEvent(
+            outcome=TerminalOutcome.UPSTREAM_ERROR,
+            failure_reason="agent_error",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValidationError, match="Instance is frozen"):
+        failure.partial = False
+
+
+@pytest.mark.parametrize(
+    "rejected",
+    ["lifecycle-secret-canary", object()],
+)
+def test_lifecycle_validator_failure_is_input_value_free(rejected: object) -> None:
+    """The shared validator raises without rendering rejected lifecycle data."""
+    with pytest.raises(ValueError, match=r"^$") as caught:
+        hermes_models._require_lifecycle_text(rejected)  # pyright: ignore[reportPrivateUsage]
+
+    rendered = f"{caught.value!s} | {caught.value!r} | {caught.value.args!r}"
+    assert "lifecycle-secret-canary" not in rendered
 
 
 def test_failure_categories_are_stable_and_distinct() -> None:

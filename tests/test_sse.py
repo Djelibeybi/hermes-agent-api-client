@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+import hermes_agent_api_client as hermes_api
 from hermes_agent_api_client import (
     AssistantDeltaEvent,
     HermesProtocolError,
@@ -489,9 +490,84 @@ async def test_tool_progress_record_is_isolated_metadata() -> None:
     """The canonical named progress event maps to the closed progress value."""
     records = _canonical_records()
     assert await _decode((records[2] + records[6],)) == (
-        ToolProgressEvent(tool_name="home_assistant", status="running"),
+        ToolProgressEvent(
+            tool_call_id="call-contract-001",
+            tool_name="home_assistant",
+            status=hermes_api.ToolProgressStatus.RUNNING,
+        ),
         TerminalEvent(outcome=TerminalOutcome.SUCCESS),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("toolCallId", "!"),
+        ("toolCallId", "~" * 256),
+        ("tool", "!"),
+        ("tool", "~" * 256),
+    ],
+)
+async def test_tool_progress_wire_text_matches_public_exact_bounds(
+    field: str,
+    value: str,
+) -> None:
+    """Wire identifiers share the exact public visible-ASCII contract."""
+    document = {
+        "toolCallId": "call-contract-001",
+        "tool": "home_assistant",
+        "status": "running",
+    }
+    document[field] = value
+
+    record = _data_record(document, event="hermes.tool.progress")
+    assert await _decode((record + _canonical_records()[6],)) == (
+        ToolProgressEvent(
+            tool_call_id=value if field == "toolCallId" else "call-contract-001",
+            tool_name=value if field == "tool" else "home_assistant",
+            status=hermes_api.ToolProgressStatus.RUNNING,
+        ),
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("toolCallId", ""),
+        ("toolCallId", "x" * 257),
+        ("toolCallId", "contains space"),
+        ("toolCallId", "line\nbreak"),
+        ("toolCallId", "café"),
+        ("toolCallId", 7),
+        ("toolCallId", True),
+        ("toolCallId", None),
+        ("tool", ""),
+        ("tool", "x" * 257),
+        ("tool", "contains space"),
+        ("tool", "\t"),
+        ("tool", "café"),
+        ("tool", 7),
+        ("tool", True),
+        ("tool", None),
+    ],
+)
+async def test_tool_progress_wire_rejects_non_contract_text(
+    field: str,
+    value: object,
+) -> None:
+    """Malformed wire lifecycle text fails as a safe protocol error."""
+    document: dict[str, object] = {
+        "toolCallId": "call-contract-001",
+        "tool": "home_assistant",
+        "status": "running",
+    }
+    document[field] = value
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((_data_record(document, event="hermes.tool.progress"),))
 
 
 @pytest.mark.asyncio
@@ -564,7 +640,11 @@ async def test_composite_golden_emits_one_success_in_closed_event_order() -> Non
     payload = load_golden_bytes("chat_completions/complete.sse")
     assert await _decode(partition_bytes(payload)) == (
         AssistantDeltaEvent(text="The lamp "),
-        ToolProgressEvent(tool_name="home_assistant", status="running"),
+        ToolProgressEvent(
+            tool_call_id="call-contract-001",
+            tool_name="home_assistant",
+            status=hermes_api.ToolProgressStatus.RUNNING,
+        ),
         KeepaliveEvent(),
         AssistantDeltaEvent(text="is on."),
         UsageEvent(input_tokens=12, output_tokens=6, total_tokens=18),
@@ -691,18 +771,38 @@ async def test_duplicate_finish_application_data_after_terminal_is_rejected() ->
         ),
         _data_record({"tool": "home_assistant"}, event="hermes.tool.progress"),
         _data_record(
-            {"tool": "", "status": "running"},
+            {"tool": "home_assistant", "status": "running"},
             event="hermes.tool.progress",
         ),
         _data_record(
-            {"tool": "home_assistant", "status": ""},
+            {"toolCallId": "call-contract-001", "tool": "", "status": "running"},
+            event="hermes.tool.progress",
+        ),
+        _data_record(
+            {
+                "toolCallId": "call-contract-001",
+                "tool": "home_assistant",
+                "status": "",
+            },
+            event="hermes.tool.progress",
+        ),
+        _data_record(
+            {
+                "toolCallId": "call-contract-001",
+                "tool": "home_assistant",
+                "status": "queued",
+            },
             event="hermes.tool.progress",
         ),
         _derived_usage_record("prompt_tokens", _BOOLEAN_TOKEN_COUNT),
         _derived_usage_record("completion_tokens", -1),
         _derived_usage_record("total_tokens", "3"),
         _data_record(
-            {"tool": "home_assistant", "status": "running"},
+            {
+                "toolCallId": "call-contract-001",
+                "tool": "home_assistant",
+                "status": "running",
+            },
             event="hermes.unknown",
         ),
         _derived_finish_record(finish_reason="mystery", include_usage=False),
@@ -715,8 +815,10 @@ async def test_duplicate_finish_application_data_after_terminal_is_rejected() ->
         "invalid-content",
         "invalid-usage",
         "invalid-progress",
+        "missing-tool-call-id",
         "empty-tool",
         "empty-status",
+        "unknown-status",
         "boolean-token-count",
         "negative-token-count",
         "coercible-token-count",
