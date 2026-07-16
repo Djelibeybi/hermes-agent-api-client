@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.2.1 (2026-07-16)
+
+### Bug Fixes
+
+- Harden repository build hygiene
+  ([#4](https://github.com/Djelibeybi/hermes-agent-api-client/pull/4),
+  [`da88f8d`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/da88f8dee707a7be9b907efd5b46075108a0f3c0))
+
+### Testing
+
+- Isolate repository ignore verification
+  ([#4](https://github.com/Djelibeybi/hermes-agent-api-client/pull/4),
+  [`da88f8d`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/da88f8dee707a7be9b907efd5b46075108a0f3c0))
+
+
 ## v0.2.0 (2026-07-16)
 
 ### Bug Fixes
