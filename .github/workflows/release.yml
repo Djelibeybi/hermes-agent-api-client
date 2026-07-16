@@ -15,81 +15,110 @@ jobs:
   release:
     if: github.repository == 'Djelibeybi/hermes-agent-api-client'
     runs-on: ubuntu-latest
+    env:
+      PACKAGE_NAME: hermes-agent-api-client
+    concurrency:
+      group: ${{ github.workflow }}-release-${{ github.ref_name }}
+      cancel-in-progress: false
     outputs:
       released: ${{ steps.release.outputs.released }}
-    permissions:
-      contents: write
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      is_prerelease: ${{ steps.release.outputs.is_prerelease }}
+
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Create release App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.PSR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PSR_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Checkout release branch with App token
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          ref: ${{ github.ref_name }}
-      - name: Set release branch to the triggering commit
-        run: git checkout -B "$GITHUB_REF_NAME" "$GITHUB_SHA"
-      - name: Import release signing key
-        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
-        with:
-          gpg_private_key: ${{ secrets.SEMANTIC_RELEASE_GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.SEMANTIC_RELEASE_GPG_PASSPHRASE }}
-          git_commit_gpgsign: true
-          git_tag_gpgsign: true
-          git_user_signingkey: true
-          git_committer_name: "Avi Miller"
-          git_committer_email: "me@dje.li"
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           python-version: "3.14"
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          version: "0.11.28"
           enable-cache: true
-      - name: Install release tooling
+
+      - name: Install locked release dependencies
         run: uv sync --locked --group release --no-default-groups
-      - name: Create release
+
+      - name: Configure release identity
+        run: |
+          git config --local user.email "github-actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git config --local commit.gpgsign false
+          git config --local tag.gpgsign false
+
+      - name: Create GitHub release and assets
         id: release
         env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_TOKEN: ${{ github.token }}
-          GIT_COMMIT_AUTHOR: "Avi Miller <me@dje.li>"
-          GIT_COMMITTER_EMAIL: "me@dje.li"
-          GIT_COMMITTER_NAME: "Avi Miller"
-          GIT_AUTHOR_EMAIL: "me@dje.li"
-          GIT_AUTHOR_NAME: "Avi Miller"
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          initial_tag="$(git tag --points-at HEAD --list 'v*')"
-          uv run --group release semantic-release version
-          final_tag="$(git tag --points-at HEAD --list 'v*')"
-          if [ -n "$final_tag" ] && [ "$initial_tag" != "$final_tag" ]; then
-            echo "released=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "released=false" >> "$GITHUB_OUTPUT"
+          set +e
+          output="$(uv run --no-sync semantic-release version 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
           fi
+          if printf '%s\n' "$output" | grep -q "No release will be made"; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version="$(uv run --no-sync python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          {
+            echo "released=true"
+            echo "version=$version"
+            echo "tag=v$version"
+            case "$version" in
+              *-*) echo "is_prerelease=true" ;;
+              *) echo "is_prerelease=false" ;;
+            esac
+          } >> "$GITHUB_OUTPUT"
+          uv run --no-sync semantic-release publish
+
       - name: Upload distribution artifacts
         if: steps.release.outputs.released == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: python-package-distributions
-          path: dist/
+          name: distribution-artifacts
+          path: dist
           if-no-files-found: error
-          retention-days: 2
 
-  publish-pypi:
+  deploy:
     needs: release
     if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/hermes-agent-api-client/
     permissions:
       id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/hermes-agent-api-client
+
     steps:
       - name: Download distribution artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: python-package-distributions
-          path: dist/
+          name: distribution-artifacts
+          path: dist
+
+      - name: Verify downloaded distribution artifacts
+        run: |
+          test -n "$(find dist -type f -name '*.whl' -print -quit)"
+          test -n "$(find dist -type f -name '*.tar.gz' -print -quit)"
+
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
-          packages-dir: dist/
-          print-hash: true
+          packages-dir: dist
