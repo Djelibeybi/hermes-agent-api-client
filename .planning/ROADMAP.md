@@ -35,7 +35,7 @@ policy remain owned by `hermes-conversation`.
   4. Every duplicate approved terminal key or contradictory `completed`, `failed`, `partial`, `error_code`, and `finish_reason` combination fails as `HermesProtocolError` instead of being resolved by precedence.
   5. Terminal events remain withheld until the response and suffix validate and cleanup succeeds; raw upstream error details stay private, transport disconnects remain transport errors, and cancellation produces no synthetic terminal event.
 
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 **Wave 1**
@@ -45,7 +45,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 02-03-PLAN.md — Decode duplicate-aware correlated tool-progress facts in order.
+- [x] 02-03-PLAN.md — Decode duplicate-aware correlated tool-progress facts in order.
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -87,6 +87,6 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1. Typed Hermes API Client | v0.1.0 | 1/1 | Complete | 2026-07-15 |
-| 2. Conversation Event Contract | v0.3.0 | 2/4 | In Progress | - |
+| 2. Conversation Event Contract | v0.3.0 | 3/4 | In Progress |  |
 | 3. Session Header Safety | v0.3.0 | 0/TBD | Not started | - |
 | 4. Contract and Distribution Verification | v0.3.0 | 0/TBD | Not started | - |
