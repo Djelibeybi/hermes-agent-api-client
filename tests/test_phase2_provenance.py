@@ -8,6 +8,7 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
@@ -96,6 +97,7 @@ def provenance() -> _ProvenanceModule:
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return cast("_ProvenanceModule", module)
 
@@ -437,7 +439,7 @@ def test_newer_release_rejects_unvalidated_or_different_evidence(  # noqa: C901
         _rewrite(newer)
     else:
         tool_path = newer.version_root / _LIFECYCLE_PATHS[0]
-        payload = tool_path.read_bytes().replace(b'"running"', b'"completed"', 1)
+        payload = tool_path.read_bytes().replace(b"call_terminal_1", b"call_terminal_2")
         tool_path.write_bytes(payload)
         entries[0]["sha256"] = hashlib.sha256(payload).hexdigest()
         _rewrite(newer)

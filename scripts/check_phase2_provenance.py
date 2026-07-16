@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
@@ -50,10 +51,17 @@ _DECISIONS = frozenset({"D-01", "D-02", "D-03", "D-04"})
 _PROVENANCE_SCHEMA_VERSION = 3
 _TERMINAL_RECORD_COUNT = 2
 _LIFECYCLE_TEXT_MAX = 256
+_MISSING = object()
 
 
 class ProvenanceError(RuntimeError):
     """An input-independent provenance validation failure."""
+
+
+@dataclass(frozen=True, slots=True)
+class _ReleaseIdentity:
+    release: str
+    commit: str
 
 
 def _fail(message: str) -> NoReturn:
@@ -84,9 +92,9 @@ def _load_object(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_bytes())
     except (OSError, UnicodeError, json.JSONDecodeError):
-        _fail(f"invalid-json:{path.relative_to(_ROOT)}")
+        _fail("invalid-provenance-json")
     if not isinstance(value, dict):
-        _fail(f"expected-object:{path.relative_to(_ROOT)}")
+        _fail("expected-provenance-object")
     return cast("dict[str, Any]", value)
 
 
@@ -145,7 +153,11 @@ def _latest_release(
 
 
 def _verify_release_record(
-    provenance: Mapping[str, Any], latest: str, latest_commit: str
+    provenance: Mapping[str, Any],
+    latest: str,
+    latest_commit: str,
+    *,
+    canonical_events: tuple[object, ...] | None = None,
 ) -> None:
     release = provenance.get("release_verification")
     if not isinstance(release, dict):
@@ -169,12 +181,17 @@ def _verify_release_record(
         return
     if disposition != "identical-public-semantics":
         _fail("newer-tag-contract-decision-required")
-    _verify_newer_release(cast("Mapping[str, Any]", release), latest, latest_commit)
+    _verify_newer_release(
+        cast("Mapping[str, Any]", release),
+        latest,
+        latest_commit,
+        canonical_events=canonical_events,
+    )
 
 
-def _verify_newer_release(  # noqa: C901, PLR0912
+def _newer_evidence(
     release: Mapping[str, Any], latest: str, latest_commit: str
-) -> None:
+) -> Mapping[str, Any]:
     evidence = release.get("latest_evidence")
     if not isinstance(evidence, dict):
         _fail("missing-newer-tag-evidence")
@@ -191,6 +208,11 @@ def _verify_newer_release(  # noqa: C901, PLR0912
         _fail("newer-tag-fixture-root-mismatch")
     _verify_reproduction(evidence)
     _require_string_list(evidence.get("semantic_assertions"), "semantic-assertions")
+    return cast("Mapping[str, Any]", evidence)
+
+
+def _verify_difference_summary(evidence: Mapping[str, Any], latest: str) -> None:
+    fixture_root = f"tests/fixtures/hermes/{latest}"
     difference = evidence.get("difference_summary")
     if not isinstance(difference, dict):
         _fail("missing-newer-tag-difference-summary")
@@ -203,6 +225,15 @@ def _verify_newer_release(  # noqa: C901, PLR0912
     changes = difference.get("changes")
     if not isinstance(changes, list) or not changes:
         _fail("empty-newer-tag-difference-summary")
+    _verify_difference_changes(changes)
+    normalized = difference.get("normalized_public_events")
+    if not isinstance(normalized, dict):
+        _fail("missing-normalized-public-events")
+    if "canonical" not in normalized or "newer" not in normalized:
+        _fail("incomplete-normalized-public-events")
+
+
+def _verify_difference_changes(changes: list[object]) -> None:
     for change in changes:
         if not isinstance(change, dict):
             _fail("invalid-newer-tag-change")
@@ -215,16 +246,51 @@ def _verify_newer_release(  # noqa: C901, PLR0912
         ):
             if field not in change:
                 _fail(f"incomplete-newer-tag-change:{field}")
-    normalized = difference.get("normalized_public_events")
-    if not isinstance(normalized, dict):
-        _fail("missing-normalized-public-events")
-    canonical = normalized.get("canonical")
-    newer = normalized.get("newer")
-    if not isinstance(canonical, dict) or not canonical or canonical != newer:
+
+
+def _verify_newer_release(
+    release: Mapping[str, Any],
+    latest: str,
+    latest_commit: str,
+    *,
+    canonical_events: tuple[object, ...] | None = None,
+) -> None:
+    evidence = _newer_evidence(release, latest, latest_commit)
+    _verify_difference_summary(evidence, latest)
+
+    if canonical_events is None:
+        canonical_source, canonical_temporary = _fetch_source_tree(_CANONICAL_COMMIT)
+        try:
+            canonical_provenance = _load_object(_PROVENANCE_PATH)
+            canonical_entries = _verify_release_manifest(
+                canonical_provenance,
+                _CANONICAL_ROOT,
+                canonical_source,
+                expected_identity=_ReleaseIdentity(_CANONICAL_TAG, _CANONICAL_COMMIT),
+                require_canonical_scope=True,
+            )
+            canonical_events = _normalize_lifecycle_events(
+                canonical_entries, _CANONICAL_ROOT
+            )
+        finally:
+            canonical_temporary.cleanup()
+
+    newer_root = _FIXTURE_ROOT / latest
+    newer_source, newer_temporary = _fetch_source_tree(latest_commit)
+    try:
+        newer_provenance = _load_object(newer_root / "provenance.json")
+        newer_entries = _verify_release_manifest(
+            newer_provenance,
+            newer_root,
+            newer_source,
+            expected_identity=_ReleaseIdentity(latest, latest_commit),
+            require_canonical_scope=False,
+        )
+        newer_events = _normalize_lifecycle_events(newer_entries, newer_root)
+    finally:
+        newer_temporary.cleanup()
+    if newer_events != canonical_events:
         _fail("newer-tag-public-events-differ")
-    newer_manifest = _FIXTURE_ROOT / latest / "provenance.json"
-    if not newer_manifest.is_file():
-        _fail("missing-newer-tag-provenance")
 
 
 def _fetch_source_tree(
@@ -310,12 +376,27 @@ def _safe_fixture_path(version_root: Path, relative: str) -> Path:
     return path
 
 
+def _verify_source_tree_head(source_root: Path, expected_commit: str) -> None:
+    if _run_git("rev-parse", "HEAD", cwd=source_root).strip() != expected_commit:
+        _fail("fixture-source-tree-mismatch")
+
+
 def _verify_fixture_entry(
-    entry: Mapping[str, Any], version_root: Path, source_root: Path
+    entry: Mapping[str, Any],
+    version_root: Path,
+    source_root: Path,
+    *,
+    expected_release: str,
+    expected_commit: str,
 ) -> None:
+    _verify_source_tree_head(source_root, expected_commit)
     relative = _require_string(entry.get("path"), "fixture-path")
     release = _require_string(entry.get("hermes_release"), "fixture-release")
     commit = _require_string(entry.get("source_commit"), "fixture-commit")
+    if release != expected_release:
+        _fail("fixture-release-mismatch")
+    if commit != expected_commit:
+        _fail("fixture-commit-mismatch")
     fixture = _safe_fixture_path(version_root, relative)
     try:
         payload = fixture.read_bytes()
@@ -329,7 +410,10 @@ def _verify_fixture_entry(
     source_refs = entry.get("source_refs")
     if source_refs is None:
         _verify_legacy_source_ref(
-            entry.get("upstream_url"), source_root, release, commit
+            entry.get("upstream_url"),
+            source_root,
+            expected_release,
+            expected_commit,
         )
         return
     if not isinstance(source_refs, list) or not source_refs:
@@ -337,7 +421,7 @@ def _verify_fixture_entry(
     for source_ref in source_refs:
         if not isinstance(source_ref, dict):
             _fail(f"invalid-source-ref:{relative}")
-        _verify_structured_source_ref(source_ref, source_root, commit)
+        _verify_structured_source_ref(source_ref, source_root, expected_commit)
 
 
 def _fixture_entries(provenance: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -463,42 +547,105 @@ def _is_lifecycle_text(value: object) -> bool:
     )
 
 
+def _lifecycle_fields(
+    hermes: Mapping[str, Any],
+) -> tuple[object, object, object, object] | None:
+    completed = hermes.get("completed", _MISSING)
+    failed = hermes.get("failed", _MISSING)
+    partial = hermes.get("partial", _MISSING)
+    code = hermes.get("error_code", _MISSING)
+    boolean_values = (completed, failed, partial)
+    if any(
+        value is not _MISSING and type(value) is not bool for value in boolean_values
+    ):
+        return None
+    return completed, failed, partial, code
+
+
+def _normalized_stop(
+    completed: object, failed: object, partial: object, code: object
+) -> tuple[str, bool, str | None] | None:
+    valid = (
+        completed in (_MISSING, True)
+        and failed in (_MISSING, False)
+        and partial in (_MISSING, False)
+        and code is _MISSING
+    )
+    return ("success", False, None) if valid else None
+
+
+def _normalized_length(
+    completed: object, failed: object, partial: object, code: object
+) -> tuple[str, bool, str | None] | None:
+    valid = (
+        completed in (_MISSING, False)
+        and failed in (_MISSING, False)
+        and partial in (_MISSING, True)
+        and code in (_MISSING, "output_truncated")
+    )
+    return ("length", True, "output_truncated") if valid else None
+
+
+def _normalized_error(
+    completed: object, failed: object, partial: object, code: object
+) -> tuple[str, bool, str | None] | None:
+    if completed not in (_MISSING, False) or failed not in (_MISSING, True):
+        return None
+    if type(partial) is not bool:
+        return None
+    if code is _MISSING:
+        reason = "agent_error"
+    elif _is_lifecycle_text(code):
+        reason = "agent_error" if code == "agent_error" else "unknown"
+    else:
+        return None
+    return ("upstream_error", cast("bool", partial), reason)
+
+
+def _normalized_terminal_event(
+    wire: Mapping[str, Any],
+) -> tuple[str, bool, str | None] | None:
+    finish = wire.get("finish_reason")
+    hermes_value = wire.get("hermes", _MISSING)
+    if hermes_value is _MISSING:
+        hermes: Mapping[str, Any] = {}
+    elif isinstance(hermes_value, dict):
+        hermes = cast("Mapping[str, Any]", hermes_value)
+    else:
+        return None
+    fields = _lifecycle_fields(hermes)
+    if fields is None:
+        return None
+    completed, failed, partial, code = fields
+    if finish == "stop":
+        return _normalized_stop(completed, failed, partial, code)
+    if finish == "length":
+        return _normalized_length(completed, failed, partial, code)
+    if finish == "error" and hermes_value is not _MISSING:
+        return _normalized_error(completed, failed, partial, code)
+    return None
+
+
 def _verify_accepted_public_event(
     case_id: str, wire: Mapping[str, Any], public_event: Mapping[str, Any]
-) -> None:
-    finish = wire.get("finish_reason")
-    hermes = wire.get("hermes", {})
-    if not isinstance(hermes, dict):
-        _fail(f"invalid-accepted-hermes:{case_id}")
-    if finish == "stop":
-        expected = {"outcome": "success", "partial": False, "failure_reason": None}
-    elif finish == "length":
-        expected = {
-            "outcome": "length",
-            "partial": True,
-            "failure_reason": "output_truncated",
-        }
-    elif finish == "error":
-        partial = hermes.get("partial")
-        if type(partial) is not bool:
-            _fail(f"invalid-accepted-error-partial:{case_id}")
-        code = hermes.get("error_code", "agent_error")
-        if not _is_lifecycle_text(code):
-            _fail(f"invalid-accepted-error-code:{case_id}")
-        expected = {
-            "outcome": "upstream_error",
-            "partial": partial,
-            "failure_reason": "agent_error" if code == "agent_error" else "unknown",
-        }
-    else:
-        _fail(f"invalid-accepted-finish-reason:{case_id}")
+) -> tuple[str, bool, str | None]:
+    normalized = _normalized_terminal_event(wire)
+    if normalized is None:
+        _fail(f"invalid-accepted-terminal-row:{case_id}")
+    outcome, partial, failure_reason = normalized
+    expected = {
+        "outcome": outcome,
+        "partial": partial,
+        "failure_reason": failure_reason,
+    }
     if public_event != expected:
         _fail(f"public-event-semantics-mismatch:{case_id}")
+    return normalized
 
 
 def _verify_design_matrix(  # noqa: C901, PLR0912
     path: Path,
-) -> None:
+) -> tuple[object, ...]:
     matrix = _load_object(path)
     if matrix.get("schema_version") != 1:
         _fail("terminal-matrix-schema-version")
@@ -508,6 +655,7 @@ def _verify_design_matrix(  # noqa: C901, PLR0912
     if not isinstance(cases, list) or not cases:
         _fail("empty-terminal-design-matrix")
     seen: set[str] = set()
+    normalized_cases: list[object] = []
     required_by_finish = {"stop": "D-01", "length": "D-02", "error": "D-03"}
     for case in cases:
         if not isinstance(case, dict):
@@ -536,42 +684,191 @@ def _verify_design_matrix(  # noqa: C901, PLR0912
                 _fail(f"missing-public-event:{case_id}")
             if set(public_event) != {"outcome", "partial", "failure_reason"}:
                 _fail(f"invalid-public-event:{case_id}")
-            _verify_accepted_public_event(case_id, wire, public_event)
+            normalized = _verify_accepted_public_event(case_id, wire, public_event)
+            normalized_cases.append(("design", case_id, "accept", *normalized))
         elif disposition == "reject":
             if expected.get("error") != "HermesProtocolError":
                 _fail(f"invalid-rejection:{case_id}")
+            if _normalized_terminal_event(wire) is not None:
+                _fail(f"accepted-design-rejection:{case_id}")
+            normalized_cases.append(("design", case_id, "reject"))
         else:
             _fail(f"invalid-terminal-disposition:{case_id}")
+    return tuple(normalized_cases)
+
+
+def _normalize_tool_events(path: Path) -> tuple[object, ...]:
+    _verify_tool_fixture(path)
+    records = _sse_data(path.read_bytes())
+    normalized: list[object] = []
+    for _, data in records[:2]:
+        document = _json_object(data)
+        tool_call_id = document.get("toolCallId")
+        tool_name = document.get("tool")
+        status = document.get("status")
+        if not _is_lifecycle_text(tool_call_id) or not _is_lifecycle_text(tool_name):
+            _fail("invalid-tool-lifecycle-text")
+        if status not in {"running", "completed"}:
+            _fail("invalid-tool-lifecycle-status")
+        normalized.append(("tool", tool_call_id, tool_name, status))
+    terminal = _json_object(records[2][1])
+    choices = cast("list[dict[str, Any]]", terminal["choices"])
+    event = _normalized_terminal_event(
+        {"finish_reason": choices[0].get("finish_reason")}
+    )
+    if event is None:
+        _fail("invalid-tool-fixture-terminal")
+    normalized.append(("terminal", *event))
+    return tuple(normalized)
+
+
+def _normalize_terminal_fixture(
+    path: Path,
+    expected: Mapping[str, object],
+    *,
+    expect_rejection: bool,
+) -> tuple[object, ...]:
+    _verify_terminal_sse(path, expected)
+    document = _json_object(_sse_data(path.read_bytes())[0][1])
+    choices = cast("list[dict[str, Any]]", document["choices"])
+    hermes = cast("dict[str, Any]", document["hermes"])
+    event = _normalized_terminal_event(
+        {
+            "finish_reason": choices[0].get("finish_reason"),
+            "hermes": hermes,
+        }
+    )
+    if expect_rejection:
+        if event is not None:
+            _fail("terminal-contradiction-was-accepted")
+        return (("terminal-rejection",),)
+    if event is None:
+        _fail("accepted-terminal-fixture-was-rejected")
+    return (("terminal", *event),)
+
+
+def _normalize_lifecycle_events(
+    entries: Mapping[str, Mapping[str, Any]], version_root: Path
+) -> tuple[object, ...]:
+    for path in _EXPECTED_KINDS:
+        if path not in entries:
+            _fail("missing-required-lifecycle-evidence")
+
+    normalized: list[object] = []
+    tool_path = "chat_completions/tool_progress_pair.sse"
+    normalized.extend(_normalize_tool_events(version_root / tool_path))
+    normalized.extend(
+        _normalize_terminal_fixture(
+            version_root / "chat_completions/terminal_length.sse",
+            {
+                "finish_reason": "length",
+                "completed": False,
+                "partial": True,
+                "failed": False,
+                "error_code": "output_truncated",
+            },
+            expect_rejection=False,
+        )
+    )
+    normalized.extend(
+        _normalize_terminal_fixture(
+            version_root / "chat_completions/terminal_agent_error.sse",
+            {
+                "finish_reason": "error",
+                "completed": False,
+                "partial": False,
+                "failed": True,
+                "error_code": "agent_error",
+            },
+            expect_rejection=False,
+        )
+    )
+    normalized.extend(
+        _normalize_terminal_fixture(
+            version_root / "chat_completions/terminal_task_exception_contradiction.sse",
+            {
+                "finish_reason": "error",
+                "completed": True,
+                "partial": False,
+                "failed": True,
+                "error_code": "agent_error",
+            },
+            expect_rejection=True,
+        )
+    )
+    normalized.extend(
+        _verify_design_matrix(
+            version_root / "chat_completions/terminal_design_matrix.json"
+        )
+    )
+    return tuple(normalized)
+
+
+def _verify_release_manifest(
+    provenance: Mapping[str, Any],
+    version_root: Path,
+    source_root: Path,
+    *,
+    expected_identity: _ReleaseIdentity,
+    require_canonical_scope: bool,
+) -> dict[str, Mapping[str, Any]]:
+    _verify_source_tree_head(source_root, expected_identity.commit)
+    if provenance.get("schema_version") != _PROVENANCE_SCHEMA_VERSION:
+        _fail("provenance-schema-version")
+    if provenance.get("hermes_release") != expected_identity.release:
+        _fail("manifest-release-mismatch")
+    if provenance.get("source_repository") != _REPOSITORY:
+        _fail("manifest-repository-mismatch")
+    if provenance.get("source_commit") != expected_identity.commit:
+        _fail("manifest-source-commit-mismatch")
+    if require_canonical_scope:
+        scope = provenance.get("evidence_scope")
+        if not isinstance(scope, dict) or scope.get("live_server_tested") is not False:
+            _fail("historical-live-server-field-changed")
+    entries = _fixture_entries(provenance)
+    if not entries:
+        _fail("empty-fixture-manifest")
+    for entry in entries.values():
+        _verify_fixture_entry(
+            entry,
+            version_root,
+            source_root,
+            expected_release=expected_identity.release,
+            expected_commit=expected_identity.commit,
+        )
+    return entries
 
 
 def _verify_all_entries(
     provenance: Mapping[str, Any], source_root: Path
 ) -> dict[str, Mapping[str, Any]]:
-    if provenance.get("schema_version") != _PROVENANCE_SCHEMA_VERSION:
-        _fail("provenance-schema-version")
-    if provenance.get("hermes_release") != _CANONICAL_TAG:
-        _fail("canonical-release-mismatch")
-    if provenance.get("source_repository") != _REPOSITORY:
-        _fail("canonical-repository-mismatch")
-    if provenance.get("source_commit") != _CANONICAL_COMMIT:
-        _fail("canonical-source-commit-mismatch")
-    scope = provenance.get("evidence_scope")
-    if not isinstance(scope, dict) or scope.get("live_server_tested") is not False:
-        _fail("historical-live-server-field-changed")
-    entries = _fixture_entries(provenance)
-    for entry in entries.values():
-        _verify_fixture_entry(entry, _CANONICAL_ROOT, source_root)
-    return entries
+    return _verify_release_manifest(
+        provenance,
+        _CANONICAL_ROOT,
+        source_root,
+        expected_identity=_ReleaseIdentity(_CANONICAL_TAG, _CANONICAL_COMMIT),
+        require_canonical_scope=True,
+    )
 
 
 def _verify_scope(scope: str) -> None:
     objects, peeled = _release_tags()
     latest, latest_commit = _latest_release(objects, peeled)
     provenance = _load_object(_PROVENANCE_PATH)
-    _verify_release_record(provenance, latest, latest_commit)
     source_root, temporary = _fetch_source_tree(_CANONICAL_COMMIT)
     try:
         entries = _verify_all_entries(provenance, source_root)
+        canonical_events = (
+            _normalize_lifecycle_events(entries, _CANONICAL_ROOT)
+            if latest != _CANONICAL_TAG
+            else None
+        )
+        _verify_release_record(
+            provenance,
+            latest,
+            latest_commit,
+            canonical_events=canonical_events,
+        )
         if scope == "release-and-tool":
             path = "chat_completions/tool_progress_pair.sse"
             if entries.get(path, {}).get("evidence_kind") != _EXPECTED_KINDS[path]:
