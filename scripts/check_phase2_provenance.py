@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 from hermes_agent_api_client.protocol import (
     _MISSING_JSON_MEMBER,  # pyright: ignore[reportPrivateUsage]
     _json_object_pairs_hook,  # pyright: ignore[reportPrivateUsage]
+    _JsonObjectPairs,  # pyright: ignore[reportPrivateUsage]
     _project_chat_chunk_object,  # pyright: ignore[reportPrivateUsage]
     _project_tool_progress_object,  # pyright: ignore[reportPrivateUsage]
 )
@@ -41,6 +42,8 @@ _ALLOWED_SOURCE_PATHS = frozenset(
     }
 )
 _NUMERIC_TAG = re.compile(r"^v(?P<version>[0-9]+(?:\.[0-9]+)+)$")
+# The production decoder ends lines only on CR, LF, or CRLF.
+_CR_LF = re.compile(r"\r\n|\r")
 _BLOB_URL = re.compile(
     rf"^{re.escape(_REPOSITORY)}/blob/(?P<ref>[^/]+)/"
     r"(?P<path>[^#]+)#L(?P<start>[0-9]+)-L(?P<end>[0-9]+)$"
@@ -143,14 +146,14 @@ def _release_tags() -> tuple[dict[str, str], dict[str, str]]:
             peeled[tag.removesuffix("^{}")] = commit
         elif _NUMERIC_TAG.fullmatch(tag):
             objects[tag] = commit
+    if not objects:
+        _fail("latest-tag-verification-blocked")
     if _CANONICAL_TAG not in objects or _CANONICAL_TAG not in peeled:
         _fail("canonical-tag-not-annotated")
     if objects[_CANONICAL_TAG] != _CANONICAL_TAG_OBJECT:
         _fail("canonical-tag-object-mismatch")
     if peeled[_CANONICAL_TAG] != _CANONICAL_COMMIT:
         _fail("canonical-peeled-commit-mismatch")
-    if not objects:
-        _fail("latest-tag-verification-blocked")
     return objects, peeled
 
 
@@ -567,10 +570,10 @@ def _sse_data(payload: bytes) -> list[tuple[str | None, str]]:
     if failed:
         _fail("fixture-is-not-utf8")
     records: list[tuple[str | None, str]] = []
-    for block in text.strip().split("\n\n"):
+    for block in _CR_LF.sub("\n", text).strip("\n").split("\n\n"):
         event: str | None = None
         data: str | None = None
-        for line in block.splitlines():
+        for line in block.split("\n"):
             if line.startswith("event: "):
                 event = line.removeprefix("event: ")
             elif line.startswith("data: "):
@@ -591,6 +594,16 @@ def _json_pairs(data: str) -> object:
     if failed:
         _fail("invalid-sse-json")
     return value
+
+
+def _raw_member(value: object, name: str) -> object:
+    if not isinstance(value, _JsonObjectPairs):
+        return _MISSING
+    result: object = _MISSING
+    for member_name, member_value in value.pairs:
+        if member_name == name:
+            result = member_value
+    return result
 
 
 def _tool_json_object(data: str) -> dict[str, object]:
@@ -628,9 +641,12 @@ def _verify_tool_fixture(path: Path) -> None:
         _fail("tool-fixture-event-name")
     if running.get("status") != "running" or completed.get("status") != "completed":
         _fail("tool-fixture-status-order")
-    if not running.get("toolCallId") or running.get("toolCallId") != completed.get(
-        "toolCallId"
-    ):
+    for record in (running, completed):
+        if not _is_lifecycle_text(record.get("toolCallId")) or not _is_lifecycle_text(
+            record.get("tool")
+        ):
+            _fail("tool-fixture-invalid-lifecycle-text")
+    if running.get("toolCallId") != completed.get("toolCallId"):
         _fail("tool-fixture-correlation")
     if running.get("tool") != completed.get("tool"):
         _fail("tool-fixture-name-mismatch")
@@ -670,8 +686,11 @@ def _verify_terminal_sse(path: Path, expected: Mapping[str, object]) -> None:
     for field in ("completed", "partial", "failed", "error_code"):
         if hermes.get(field) != expected.get(field):
             _fail("terminal-field-mismatch")
-    if "error" not in document:
+    raw = _json_pairs(records[0][1])
+    if _raw_member(raw, "error") is _MISSING:
         _fail("missing-raw-error-canary")
+    if _raw_member(_raw_member(raw, "hermes"), "error") is _MISSING:
+        _fail("missing-raw-hermes-error-canary")
 
 
 def _contains_none(value: object) -> bool:

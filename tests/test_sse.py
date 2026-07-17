@@ -772,7 +772,17 @@ async def test_duplicate_approved_tool_members_fail_before_dictionary_collapse(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["root-hermes", "choice-finish-reason"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "root-hermes",
+        "choice-finish-reason",
+        "root-choices",
+        "root-usage",
+        "choice-delta",
+        "delta-content",
+    ],
+)
 @pytest.mark.parametrize("conflicting", [False, True], ids=["same", "conflicting"])
 async def test_duplicate_approved_chat_members_fail_before_materialization(
     path: str,
@@ -780,15 +790,53 @@ async def test_duplicate_approved_chat_members_fail_before_materialization(
 ) -> None:
     """Chat duplicate evidence is checked before nested pairs become mappings."""
     assert isinstance(conflicting, bool)
+    canonical_choice = '[{"delta":{"content":"kept"},"finish_reason":null}]'
     if path == "root-hermes":
         duplicate = '{"partial":true}' if conflicting else '{"partial":false}'
         members = (
-            (
-                "choices",
-                '[{"delta":{"content":"kept"},"finish_reason":null}]',
-            ),
+            ("choices", canonical_choice),
             ("hermes", '{"partial":false}'),
             ("hermes", duplicate),
+        )
+    elif path == "root-choices":
+        duplicate = (
+            '[{"delta":{"content":"smuggled"},"finish_reason":"stop"}]'
+            if conflicting
+            else canonical_choice
+        )
+        members = (("choices", canonical_choice), ("choices", duplicate))
+    elif path == "root-usage":
+        usage = '{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}'
+        duplicate = (
+            '{"prompt_tokens":9,"completion_tokens":9,"total_tokens":18}'
+            if conflicting
+            else usage
+        )
+        members = (
+            ("choices", canonical_choice),
+            ("usage", usage),
+            ("usage", duplicate),
+        )
+    elif path == "choice-delta":
+        duplicate = '{"content":"smuggled"}' if conflicting else '{"content":"kept"}'
+        members = (
+            (
+                "choices",
+                "["
+                '{"delta":{"content":"kept"},'
+                f'"delta":{duplicate},"finish_reason":null'
+                "}]",
+            ),
+        )
+    elif path == "delta-content":
+        duplicate = '"smuggled"' if conflicting else '"kept"'
+        members = (
+            (
+                "choices",
+                "["
+                f'{{"delta":{{"content":"kept","content":{duplicate}}},'
+                '"finish_reason":null}]',
+            ),
         )
     else:
         duplicate = '"stop"' if conflicting else "null"
@@ -1436,6 +1484,17 @@ async def test_application_data_after_terminal_is_rejected() -> None:
     content = _canonical_records()[1]
 
     assert await _decode_prefix_before_failure((finish + content,)) == ()
+
+
+@pytest.mark.asyncio
+async def test_keepalive_after_terminal_is_accepted() -> None:
+    """A heartbeat between the finish chunk and DONE keeps the stream valid."""
+    finish = _derived_finish_record(finish_reason="stop", include_usage=False)
+
+    assert await _decode((finish + b": ping\n\n" + b"data: [DONE]\n\n",)) == (
+        KeepaliveEvent(),
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS, partial=False),
+    )
 
 
 @pytest.mark.asyncio

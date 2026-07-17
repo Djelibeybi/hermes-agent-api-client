@@ -153,13 +153,19 @@ def _json_object_pairs_hook(  # pyright: ignore[reportUnusedFunction]
     return _JsonObjectPairs(tuple(pairs))
 
 
+class _DuplicateJsonMemberError(Exception):
+    """One materialized JSON object carried the same member name twice."""
+
+
 def _materialize_json_value(value: object) -> object:
     """Recursively convert private pair nodes into ordinary JSON containers."""
     if isinstance(value, _JsonObjectPairs):
-        return {
-            key: _materialize_json_value(member_value)
-            for key, member_value in value.pairs
-        }
+        materialized: dict[str, object] = {}
+        for key, member_value in value.pairs:
+            if key in materialized:
+                raise _DuplicateJsonMemberError
+            materialized[key] = _materialize_json_value(member_value)
+        return materialized
     if isinstance(value, list):
         items = cast("list[object]", value)
         return [_materialize_json_value(item) for item in items]
@@ -188,6 +194,7 @@ def _last_member_value(value: _JsonObjectPairs, member_name: str) -> object:
 
 
 _TOOL_PROGRESS_MEMBERS = frozenset(("toolCallId", "tool", "status"))
+_CHAT_CHUNK_MEMBERS = frozenset(("choices", "usage"))
 _TERMINAL_METADATA_MEMBERS = frozenset(("completed", "failed", "partial", "error_code"))
 
 
@@ -231,7 +238,7 @@ def _project_tool_progress_object(  # pyright: ignore[reportUnusedFunction]
             if name in projected:
                 return None
             projected[name] = _materialize_json_value(member_value)
-    except RecursionError:
+    except (RecursionError, _DuplicateJsonMemberError):
         return None
     return projected
 
@@ -239,7 +246,7 @@ def _project_tool_progress_object(  # pyright: ignore[reportUnusedFunction]
 def _project_chat_chunk_object(  # pyright: ignore[reportUnusedFunction]
     value: object,
 ) -> _ProjectedChatChunk | None:
-    """Project terminal facts, then materialize the additive chat wire tree."""
+    """Project terminal facts and the unique approved chat members."""
     if not isinstance(value, _JsonObjectPairs):
         return None
     if _has_duplicate_member(value, "hermes"):
@@ -249,25 +256,18 @@ def _project_chat_chunk_object(  # pyright: ignore[reportUnusedFunction]
     if terminal_metadata is None:
         return None
 
-    choices = _last_member_value(value, "choices")
-    choice_values = cast("list[object]", choices) if isinstance(choices, list) else []
-    if (
-        len(choice_values) == 1
-        and isinstance(choice_values[0], _JsonObjectPairs)
-        and _has_duplicate_member(choice_values[0], "finish_reason")
-    ):
-        return None
-
+    projected: dict[str, object] = {}
     try:
-        materialized = {
-            name: _materialize_json_value(member_value)
-            for name, member_value in value.pairs
-            if name != "hermes"
-        }
-    except RecursionError:
+        for name, member_value in value.pairs:
+            if name not in _CHAT_CHUNK_MEMBERS:
+                continue
+            if name in projected:
+                return None
+            projected[name] = _materialize_json_value(member_value)
+    except (RecursionError, _DuplicateJsonMemberError):
         return None
     return _ProjectedChatChunk(
-        document=materialized,
+        document=projected,
         terminal_metadata=terminal_metadata,
     )
 
