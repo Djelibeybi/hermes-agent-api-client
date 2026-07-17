@@ -8,14 +8,16 @@ itself — that no fixture drifted from its recorded hash, that each still carri
 the facts it was captured to demonstrate, and that the design matrix continues
 to agree with the client's own terminal mapping rather than a restatement of it.
 
-Release identity and upstream source anchoring are deliberately not verified
-here; both required cloning the upstream repository over the network.
+The recorded release identity is checked for agreement with the release this
+module pins. Anchoring those values to the upstream repository is what required
+the network, and remains out of scope here.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -26,18 +28,20 @@ from hermes_agent_api_client.protocol import (
     _MISSING_JSON_MEMBER,
     _json_object_pairs_hook,
     _JsonObjectPairs,
+    _parse_chat_chunk,
     _project_chat_chunk_object,
-    _project_terminal_metadata,
     _project_tool_progress_object,
 )
-from hermes_agent_api_client.sse import _map_terminal_event
+from hermes_agent_api_client.sse import _TERMINAL_MAPPING_FAILURE, _map_terminal_event
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
 _CANONICAL_TAG = "v2026.7.7.2"
+_CANONICAL_TAG_OBJECT = "b7751df34688835a108e0d630f3495fc11f3df79"
 _CANONICAL_COMMIT = "9de9c25f620ff7f1ce0fd5457d596052d5159596"
 _REPOSITORY = "https://github.com/NousResearch/hermes-agent"
+_COMPATIBILITY_DISPOSITIONS = frozenset({"canonical-current", "canonical-superseded"})
 _CANONICAL_ROOT = (
     Path(__file__).resolve().parent / "fixtures" / "hermes" / _CANONICAL_TAG
 )
@@ -95,6 +99,25 @@ _TERMINAL_FIXTURES: tuple[tuple[str, dict[str, object], bool], ...] = (
     ),
 )
 _LIFECYCLE_FIELDS = ("completed", "failed", "partial", "error_code")
+# Raw upstream text a fixture carries so the leak assertions are not vacuous.
+_CANARY_PATTERN = re.compile(r"phase2-raw-[a-z-]+-canary|[A-Za-z]*Error")
+# Every matrix row must cite the decision that governs its finish reason, so a
+# decision cannot silently lose the rows that are its only executable evidence.
+_REQUIRED_BY_FINISH = {"stop": "D-01", "length": "D-02", "error": "D-03"}
+
+
+def _contains_none(value: object) -> bool:
+    """Report whether a null appears anywhere in one recorded wire value."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if item is None:
+            return True
+        if type(item) is dict:
+            pending.extend(cast("dict[str, object]", item).values())
+        elif type(item) is list:
+            pending.extend(cast("list[object]", item))
+    return False
 
 
 def _manifest() -> dict[str, Any]:
@@ -117,26 +140,50 @@ def _entries() -> dict[str, Mapping[str, Any]]:
     return entries
 
 
-def _sse_records(payload: bytes) -> list[tuple[str | None, str]]:
-    """Frame fixture bytes the way the production decoder frames a stream."""
+def _sse_records(payload: bytes) -> list[tuple[str | None, str | None]]:
+    """Frame fixture bytes the way the production decoder frames a stream.
+
+    A record the decoder would never dispatch is not the evidence the fixture
+    claims to be, so an unterminated payload fails here rather than framing
+    identically to a terminated one. Comment-only records carry no data.
+    """
     text = payload.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
-    records: list[tuple[str | None, str]] = []
-    for block in text.strip("\n").split("\n\n"):
+    assert text.endswith("\n\n"), "fixture does not terminate its final record"
+    records: list[tuple[str | None, str | None]] = []
+    for block in text[:-2].split("\n\n"):
         event: str | None = None
-        data: str | None = None
+        data_lines: list[str] = []
         for line in block.split("\n"):
-            if line.startswith("event: "):
-                event = line.removeprefix("event: ")
-            elif line.startswith("data: "):
-                data = line.removeprefix("data: ")
-        assert data is not None, "fixture record carries no data line"
-        records.append((event, data))
+            if line.startswith(":"):
+                continue
+            field, separator, value = line.partition(":")
+            if not separator:
+                value = ""
+            elif value.startswith(" "):
+                value = value[1:]
+            if field == "data":
+                data_lines.append(value)
+            elif field == "event":
+                event = value
+        records.append((event, "\n".join(data_lines) if data_lines else None))
     return records
+
+
+def _record_data(record: tuple[str | None, str | None]) -> str:
+    """Return one record's joined data, requiring the record to carry some."""
+    data = record[1]
+    assert data is not None, "fixture record carries no data line"
+    return data
 
 
 def _json_pairs(data: str) -> object:
     """Decode one record while retaining duplicate-member evidence."""
     return json.loads(data, object_pairs_hook=_json_object_pairs_hook)
+
+
+def _canaries(data: str) -> frozenset[str]:
+    """Return the raw upstream markers one record actually carries."""
+    return frozenset(_CANARY_PATTERN.findall(data))
 
 
 def _raw_member(value: object, name: str) -> object:
@@ -150,24 +197,29 @@ def _raw_member(value: object, name: str) -> object:
     return result
 
 
-def _terminal_event(wire: Mapping[str, Any]) -> TerminalEvent | None:
-    """Derive the public terminal event using the client's own mapping."""
-    hermes_value = wire.get("hermes", _MISSING_JSON_MEMBER)
-    if hermes_value is _MISSING_JSON_MEMBER:
-        projected: object = _MISSING_JSON_MEMBER
-    elif isinstance(hermes_value, dict):
-        members = cast("dict[str, object]", hermes_value)
-        projected = _JsonObjectPairs(tuple(members.items()))
-    else:
-        return None
-    metadata = _project_terminal_metadata(projected)
-    if metadata is None:
-        return None
-    finish = wire.get("finish_reason")
-    if finish is not None and type(finish) is not str:
-        return None
-    event = _map_terminal_event(finish, metadata)
-    return event if isinstance(event, TerminalEvent) else None
+def _terminal_outcome(wire: Mapping[str, Any]) -> object:
+    """Derive the terminal outcome along the client's own decode path.
+
+    Returns exactly what the client distinguishes: a `TerminalEvent`, `None`
+    for an accepted non-terminal chunk, or `_TERMINAL_MAPPING_FAILURE` for the
+    rejection that surfaces as `HermesProtocolError`.
+    """
+    document: dict[str, object] = {
+        "choices": [{"delta": {}, "finish_reason": wire.get("finish_reason")}],
+    }
+    if "hermes" in wire:
+        document["hermes"] = wire["hermes"]
+
+    projected = _project_chat_chunk_object(_json_pairs(json.dumps(document)))
+    if projected is None:
+        return _TERMINAL_MAPPING_FAILURE
+    chunk = _parse_chat_chunk(projected.document)
+    if chunk is None:
+        return _TERMINAL_MAPPING_FAILURE
+    return _map_terminal_event(
+        chunk.choices[0].finish_reason,
+        projected.terminal_metadata,
+    )
 
 
 def _public_event(event: TerminalEvent) -> dict[str, object]:
@@ -199,6 +251,18 @@ def test_manifest_records_the_canonical_release_identity() -> None:
     assert manifest["source_commit"] == _CANONICAL_COMMIT
 
 
+def test_manifest_records_the_canonical_release_verification() -> None:
+    """The recorded release identity agrees with the pinned canonical release."""
+    release = _manifest()["release_verification"]
+
+    assert release["canonical_tag"] == _CANONICAL_TAG
+    assert release["canonical_tag_object"] == _CANONICAL_TAG_OBJECT
+    assert release["canonical_peeled_commit"] == _CANONICAL_COMMIT
+    assert release["compatibility_disposition"] in _COMPATIBILITY_DISPOSITIONS
+    assert release["observed_latest_numeric_tag"] == _CANONICAL_TAG
+    assert release["observed_latest_peeled_commit"] == _CANONICAL_COMMIT
+
+
 def test_manifest_describes_every_fixture_file_and_no_others() -> None:
     """No fixture escapes the manifest and no manifest entry lacks a file."""
     on_disk = {
@@ -210,7 +274,12 @@ def test_manifest_describes_every_fixture_file_and_no_others() -> None:
     assert set(_entries()) == on_disk
 
 
-@pytest.mark.parametrize("path", sorted(_EXPECTED_KINDS))
+def test_every_manifest_entry_has_a_declared_evidence_role() -> None:
+    """No fixture is verified against expectations this module never states."""
+    assert set(_EXPECTED_KINDS) == set(_entries())
+
+
+@pytest.mark.parametrize("path", sorted(_entries()))
 def test_fixture_bytes_still_match_the_recorded_hash(path: str) -> None:
     """A fixture edited after capture stops being the evidence it claims."""
     entry = _entries()[path]
@@ -219,7 +288,7 @@ def test_fixture_bytes_still_match_the_recorded_hash(path: str) -> None:
     assert digest == entry["sha256"]
 
 
-@pytest.mark.parametrize("path", sorted(_EXPECTED_KINDS))
+@pytest.mark.parametrize("path", sorted(_entries()))
 def test_every_entry_carries_the_canonical_identity_and_role(path: str) -> None:
     """Each fixture states the release, commit, and evidence role it plays."""
     entry = _entries()[path]
@@ -243,7 +312,8 @@ def test_tool_fixture_proves_correlated_ordered_progress() -> None:
     assert len(records) == _TOOL_RECORD_COUNT
 
     progress = [
-        _project_tool_progress_object(_json_pairs(data)) for _, data in records[:2]
+        _project_tool_progress_object(_json_pairs(_record_data(record)))
+        for record in records[:2]
     ]
     running, completed = progress
     assert running is not None
@@ -274,7 +344,7 @@ def test_terminal_fixture_carries_the_lifecycle_facts_it_demonstrates(
     assert len(records) == _TERMINAL_RECORD_COUNT
     assert records[1] == (None, "[DONE]")
 
-    projected = _project_chat_chunk_object(_json_pairs(records[0][1]))
+    projected = _project_chat_chunk_object(_json_pairs(_record_data(records[0])))
     assert projected is not None
     choices = cast("list[dict[str, Any]]", projected.document["choices"])
     assert choices[0]["finish_reason"] == expected["finish_reason"]
@@ -291,7 +361,10 @@ def test_terminal_fixture_carries_the_lifecycle_facts_it_demonstrates(
     }
 
     event = _map_terminal_event(choices[0]["finish_reason"], metadata)
-    assert isinstance(event, TerminalEvent) is not expect_rejection
+    if expect_rejection:
+        assert event is _TERMINAL_MAPPING_FAILURE
+    else:
+        assert isinstance(event, TerminalEvent)
 
 
 @pytest.mark.parametrize(
@@ -302,10 +375,40 @@ def test_terminal_fixture_carries_the_lifecycle_facts_it_demonstrates(
 def test_terminal_fixture_still_carries_its_raw_error_canaries(path: str) -> None:
     """Leak tests are vacuous unless the fixture really carries raw error text."""
     records = _sse_records((_CANONICAL_ROOT / path).read_bytes())
-    raw = _json_pairs(records[0][1])
+    raw = _json_pairs(_record_data(records[0]))
 
     assert _raw_member(raw, "error") is not _MISSING_JSON_MEMBER
     assert _raw_member(_raw_member(raw, "hermes"), "error") is not _MISSING_JSON_MEMBER
+    assert _canaries(_record_data(records[0])), "fixture carries no canary text"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [path for path, _, _ in _TERMINAL_FIXTURES],
+    ids=[path.rsplit("/", 1)[-1] for path, _, _ in _TERMINAL_FIXTURES],
+)
+def test_terminal_fixture_raw_error_text_never_reaches_the_projection(
+    path: str,
+) -> None:
+    """The canaries the fixtures carry are the ones projection must discard."""
+    records = _sse_records((_CANONICAL_ROOT / path).read_bytes())
+    data = _record_data(records[0])
+    canaries = _canaries(data)
+
+    projected = _project_chat_chunk_object(_json_pairs(data))
+
+    assert projected is not None
+    retained = json.dumps(
+        {
+            "document": projected.document,
+            "metadata": [
+                repr(getattr(projected.terminal_metadata, name))
+                for name in _LIFECYCLE_FIELDS
+            ],
+        },
+    )
+    for canary in canaries:
+        assert canary not in retained
 
 
 def test_design_matrix_agrees_with_the_client_terminal_mapping() -> None:
@@ -326,12 +429,18 @@ def test_design_matrix_agrees_with_the_client_terminal_mapping() -> None:
         assert refs <= _DECISIONS
 
         wire = cast("Mapping[str, Any]", case["wire"])
+        finish = wire.get("finish_reason")
+        assert type(finish) is str, case_id
+        assert _REQUIRED_BY_FINISH.get(finish) in refs, case_id
+        if "hermes" in wire and _contains_none(wire["hermes"]):
+            assert "D-04" in refs, case_id
+
         expected = cast("Mapping[str, Any]", case["expected"])
-        event = _terminal_event(wire)
+        outcome = _terminal_outcome(wire)
         if expected["disposition"] == "accept":
-            assert event is not None, case_id
-            assert _public_event(event) == expected["public_event"], case_id
+            assert isinstance(outcome, TerminalEvent), case_id
+            assert _public_event(outcome) == expected["public_event"], case_id
         else:
             assert expected["disposition"] == "reject", case_id
             assert expected["error"] == "HermesProtocolError", case_id
-            assert event is None, case_id
+            assert outcome is _TERMINAL_MAPPING_FAILURE, case_id
