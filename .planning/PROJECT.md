@@ -48,12 +48,12 @@ Python consumers can use a typed, bounded, secret-safe asynchronous client for t
 - ✓ Capability discovery and streaming Chat Completions — v0.1.0
 - ✓ Caller-owned HTTP lifecycle, cancellation, and cleanup guarantees — v0.1.0
 - ✓ Typed distribution and locked verification gates — v0.1.0
+- ✓ Correlated, bounded tool-progress events — validated in Phase 2: Conversation Event Contract
+- ✓ Safe terminal partial-state and failure metadata — validated in Phase 2: Conversation Event Contract
 
 ### Active
 
 - [ ] Consumers can send independently optional, strictly validated session ID and session key headers without mutating caller or client state.
-- [ ] Consumers receive correlated tool-progress events with bounded identifiers and a closed lifecycle-status set.
-- [ ] Consumers receive safe terminal partial-state and failure-reason metadata without raw upstream error details.
 - [ ] Existing authentication, retryability, protocol ordering, resource ownership, typing, coverage, and distribution guarantees remain green.
 
 ### Out of Scope
@@ -80,4 +80,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-17 after starting milestone v0.3.0*
+*Last updated: 2026-07-17 after completing Phase 2: Conversation Event Contract*
