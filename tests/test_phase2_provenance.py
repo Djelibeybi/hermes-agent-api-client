@@ -9,6 +9,7 @@ import json
 import shutil
 import subprocess
 import sys
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
@@ -71,6 +72,20 @@ class _ProvenanceModule(Protocol):
         latest: str,
         latest_commit: str,
     ) -> None: ...
+
+    def _normalize_lifecycle_events(
+        self,
+        entries: Mapping[str, Mapping[str, object]],
+        version_root: Path,
+    ) -> tuple[object, ...]: ...
+
+    def _verify_design_matrix(self, path: Path) -> tuple[object, ...]: ...
+
+    def _source_lines(
+        self, source_root: Path, path: str, start: int, end: int
+    ) -> bytes: ...
+
+    def main(self, arguments: list[str] | None = None) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -291,6 +306,51 @@ def _rewrite(evidence: _ReleaseEvidence) -> None:
     _write_manifest(evidence.version_root, evidence.manifest)
 
 
+def _replace_fixture_bytes(
+    evidence: _ReleaseEvidence,
+    relative: str,
+    old: bytes,
+    new: bytes,
+) -> None:
+    path = evidence.version_root / relative
+    payload = path.read_bytes()
+    assert payload.count(old) >= 1
+    payload = payload.replace(old, new, 1)
+    path.write_bytes(payload)
+    entry = next(
+        item for item in _manifest_entries(evidence) if item["path"] == relative
+    )
+    entry["sha256"] = hashlib.sha256(payload).hexdigest()
+    _rewrite(evidence)
+
+
+def _newer_harness(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    name: str,
+) -> tuple[_ReleaseEvidence, _ReleaseEvidence, dict[str, object]]:
+    fixture_root = tmp_path / "fixtures"
+    canonical = _release_evidence(
+        provenance,
+        tmp_path,
+        release="v-test-canonical",
+        name=f"{name}-canonical",
+        canonical_scope=True,
+    )
+    newer = _release_evidence(
+        provenance,
+        tmp_path,
+        release="v-test-newer",
+        name=f"{name}-newer",
+        canonical_scope=False,
+    )
+    _install_release_roots(provenance, monkeypatch, fixture_root, canonical)
+    _install_fetcher(provenance, monkeypatch, (canonical, newer))
+    return canonical, newer, _latest_release_record(newer)
+
+
 def test_fixture_identity_is_bound_to_external_release_and_commit(
     provenance: _ProvenanceModule,
     tmp_path: Path,
@@ -488,3 +548,219 @@ def test_complete_newer_release_uses_bytes_not_declaration_maps(
 
     assert probes
     assert all(probe.called for probe in probes)
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "first_value"),
+    [
+        (_LIFECYCLE_PATHS[0], b'"toolCallId": "call_terminal_1"', b'"other"'),
+        (_LIFECYCLE_PATHS[0], b'"tool": "terminal"', b'"other"'),
+        (_LIFECYCLE_PATHS[0], b'"status": "running"', b'"completed"'),
+        (
+            _LIFECYCLE_PATHS[2],
+            b'"hermes": {',
+            b'{"completed": false}, "hermes": {',
+        ),
+        (_LIFECYCLE_PATHS[2], b'"finish_reason": "error"', b'"stop"'),
+        (_LIFECYCLE_PATHS[2], b'"completed": false', b"true"),
+        (_LIFECYCLE_PATHS[2], b'"failed": true', b"false"),
+        (_LIFECYCLE_PATHS[2], b'"partial": false', b"true"),
+        (_LIFECYCLE_PATHS[2], b'"error_code": "agent_error"', b'"other"'),
+    ],
+)
+@pytest.mark.parametrize("same_value", [True, False], ids=("same", "conflicting"))
+def test_newer_release_rejects_every_approved_duplicate_family(  # noqa: PLR0913
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    relative: str,
+    old: bytes,
+    first_value: bytes,
+    *,
+    same_value: bool,
+) -> None:
+    """Reject duplicates even when ordinary JSON would retain canonical last value."""
+    _, newer, release_record = _newer_harness(
+        provenance, monkeypatch, tmp_path, name="duplicate"
+    )
+    key, canonical_value = old.split(b": ", 1)
+    if key == b'"hermes"':
+        duplicate = b'{"completed": false}, "hermes": {' if same_value else first_value
+        replacement = key + b": " + duplicate
+    else:
+        duplicate_value = canonical_value if same_value else first_value
+        replacement = key + b": " + duplicate_value + b", " + old
+    _replace_fixture_bytes(newer, relative, old, replacement)
+
+    with pytest.raises(provenance.ProvenanceError):
+        provenance._verify_newer_release(release_record, newer.release, newer.commit)
+
+
+def test_newer_release_accepts_duplicate_inside_ignored_additive_data(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Keep additive duplicate compatibility aligned with the production projector."""
+    _, newer, release_record = _newer_harness(
+        provenance, monkeypatch, tmp_path, name="additive"
+    )
+    old = '"emoji": "🖥️"'.encode()
+    _replace_fixture_bytes(newer, _LIFECYCLE_PATHS[0], old, old + b", " + old)
+
+    provenance._verify_newer_release(release_record, newer.release, newer.commit)
+
+
+@pytest.mark.parametrize("relative", _LIFECYCLE_PATHS)
+@pytest.mark.parametrize("attack", ["unknown", "swapped"])
+def test_lifecycle_evidence_roles_are_exact_for_every_required_path(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    relative: str,
+    attack: str,
+) -> None:
+    """Reject unknown and opposite evidence roles in release-agnostic validation."""
+    _, newer, release_record = _newer_harness(
+        provenance, monkeypatch, tmp_path, name="role"
+    )
+    entry = next(item for item in _manifest_entries(newer) if item["path"] == relative)
+    entry["evidence_kind"] = (
+        "editor-invented"
+        if attack == "unknown"
+        else (
+            "tag-source-derived"
+            if _KINDS[relative] == "design-derived"
+            else "design-derived"
+        )
+    )
+    _rewrite(newer)
+
+    with pytest.raises(
+        provenance.ProvenanceError, match=r"^lifecycle-evidence-role-mismatch$"
+    ):
+        provenance._verify_newer_release(release_record, newer.release, newer.commit)
+
+
+def _assert_closed_error(error: BaseException, *canaries: str) -> None:
+    rendered = (
+        str(error),
+        repr(error),
+        repr(error.args),
+        "".join(traceback.format_exception(error)),
+    )
+    for canary in canaries:
+        assert all(canary not in value for value in rendered)
+    assert len(error.args) == 1
+    assert isinstance(error.args[0], str)
+    assert "\n" not in error.args[0]
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
+def test_fixture_path_failure_is_closed_and_context_free(
+    provenance: _ProvenanceModule,
+    tmp_path: Path,
+) -> None:
+    """Do not retain a missing editor-controlled fixture path or OSError."""
+    evidence = _release_evidence(
+        provenance,
+        tmp_path,
+        release="v-test-canonical",
+        name="fixture-canary",
+        canonical_scope=True,
+    )
+    entry = _manifest_entries(evidence)[0]
+    canary = "fixture-secret-canary\nforged-line.sse"
+    entry["path"] = canary
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._verify_fixture_entry(
+            entry,
+            evidence.version_root,
+            evidence.source_root,
+            expected_release=evidence.release,
+            expected_commit=evidence.commit,
+        )
+    _assert_closed_error(caught.value, "fixture-secret-canary", "forged-line")
+
+
+def test_source_path_and_range_failures_are_closed(
+    provenance: _ProvenanceModule,
+    tmp_path: Path,
+) -> None:
+    """Do not disclose source paths or ranges from anchor failures."""
+    source_root, _ = _source_repository(tmp_path, "source-canary")
+    for path, start, end, canaries in (
+        ("source-secret-canary\nforged.py", 1, 2, ("source-secret-canary",)),
+        (
+            "gateway/platforms/api_server.py",
+            1,
+            987654321,
+            ("987654321",),
+        ),
+    ):
+        with pytest.raises(provenance.ProvenanceError) as caught:
+            provenance._source_lines(source_root, path, start, end)
+        _assert_closed_error(caught.value, *canaries)
+
+
+def test_terminal_case_id_failure_is_closed(
+    provenance: _ProvenanceModule,
+    tmp_path: Path,
+) -> None:
+    """Do not disclose design-matrix case identifiers."""
+    canary = "case-secret-canary\nforged-line"
+    path = tmp_path / "matrix.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "decision_refs": ["D-01", "D-02", "D-03", "D-04"],
+                "cases": [
+                    {
+                        "id": canary,
+                        "wire": {"finish_reason": "stop"},
+                        "expected": {"disposition": "accept"},
+                        "decision_refs": ["D-01"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._verify_design_matrix(path)
+    _assert_closed_error(caught.value, "case-secret-canary", "forged-line")
+
+
+def test_main_prints_one_closed_code_for_real_canary_failure(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Keep the executable verifier's stderr closed and single-line."""
+    evidence = _release_evidence(
+        provenance,
+        tmp_path,
+        release="v-test-canonical",
+        name="cli-canary",
+        canonical_scope=True,
+    )
+    canary = "cli-secret-canary\nforged-line.sse"
+    _manifest_entries(evidence)[0]["path"] = canary
+    _rewrite(evidence)
+    _install_release_roots(provenance, monkeypatch, tmp_path / "fixtures", evidence)
+    _install_fetcher(provenance, monkeypatch, (evidence,))
+    monkeypatch.setattr(
+        provenance,
+        "_release_tags",
+        lambda: ({evidence.release: "tag-object"}, {evidence.release: evidence.commit}),
+    )
+
+    assert provenance.main(["--scope", "release-and-tool"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "missing-fixture\n"
+    assert "cli-secret-canary" not in captured.err
+    assert "forged-line" not in captured.err
