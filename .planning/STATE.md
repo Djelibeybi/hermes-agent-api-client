@@ -5,16 +5,16 @@ milestone_name: Conversation Contract
 current_phase: 02
 current_phase_name: conversation-event-contract
 status: executing
-stopped_at: Planned 02-06-PLAN.md gap closure
-last_updated: "2026-07-17T00:25:32.214Z"
+stopped_at: Completed 02-06-PLAN.md
+last_updated: "2026-07-17T00:45:33.602Z"
 last_activity: 2026-07-17
-last_activity_desc: Phase 02 provenance hardening gap closure planned
+last_activity_desc: Phase 02 provenance trust-boundary gaps closed
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 6
-  completed_plans: 5
-  percent: 83
+  completed_plans: 6
+  percent: 33
 ---
 
 # Project State
@@ -28,12 +28,12 @@ See: `.planning/PROJECT.md` (updated 2026-07-17)
 
 ## Current Position
 
-Phase: 02 (conversation-event-contract) — PLANNED
-Plan: 5 of 6
-Status: Ready to execute
-Last activity: 2026-07-17 — Phase 02 provenance hardening gap closure planned
+Phase: 02 (conversation-event-contract) — COMPLETE
+Plan: 6 of 6
+Status: Phase complete — ready for verification
+Last activity: 2026-07-17 — Phase 02 provenance trust-boundary gaps closed
 
-Progress: [████████░░] 83%
+Progress: [██████████] 100%
 
 ## Accumulated Context
 
@@ -57,6 +57,9 @@ Progress: [████████░░] 83%
 - [Phase 02]: Release evidence is authenticated from externally expected release and commit values; entry-owned fields never establish their own trust root. — This closes CR-01 and D-14 by binding source anchors to the exact checked-out commit.
 - [Phase 02]: Newer-tag compatibility is computed from validated immutable lifecycle bytes instead of declaration-map equality. — This closes CR-02 and D-16 while retaining difference_summary as audit metadata.
 - [Phase 02]: Historical evidence_scope.live_server_tested validation remains canonical-only. — New release manifests use the release-agnostic identity, inventory, hash, and anchor contract without requiring a legacy field.
+- [Phase 02]: Lifecycle compatibility reuses the production pair hook and event-specific projectors, rejecting approved duplicates while retaining additive compatibility.
+- [Phase 02]: Every required lifecycle path must match its exact source-derived or design-derived evidence role before normalization.
+- [Phase 02]: Provenance failures expose one finite constant code and translate lower-level exceptions outside active handlers.
 
 ### Historical Context
 
@@ -72,8 +75,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-17T00:25:32.214Z
-Stopped at: Planned 02-06-PLAN.md gap closure
+Last session: 2026-07-17T00:45:33.596Z
+Stopped at: Completed 02-06-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -85,3 +88,4 @@ Resume file: None
 | Phase 02 P03 | 10min | 1 tasks | 6 files |
 | Phase 02 P04 | 9min | 1 tasks | 9 files |
 | Phase 02 P05 | 12min | 1 tasks | 2 files |
+| Phase 02 P06 | 12min | 1 tasks | 2 files |
