@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING, Never, Protocol, cast, runtime_checkable
 
 import httpx
 
-from .models import HermesCapabilities, HermesEvent, TerminalEvent
+from .models import (
+    HermesCapabilities,
+    HermesEvent,
+    TerminalEvent,
+    _require_lifecycle_text,  # pyright: ignore[reportPrivateUsage]
+)
 from .protocol import (
     HermesAuthenticationError,
     HermesContractError,
@@ -44,7 +49,6 @@ _CHAT_STREAM_TIMEOUT = httpx.Timeout(
 _SUPPORTED_SCHEMES = frozenset({"http", "https"})
 _VISIBLE_ASCII_MIN = 0x21
 _VISIBLE_ASCII_MAX = 0x7E
-_MAX_SESSION_VALUE_LENGTH = 256
 _WINDOWS_DRIVE_PREFIX_LENGTH = 2
 _MAX_CONTENT_LENGTH_DIGITS = 20
 
@@ -130,8 +134,6 @@ def _operation_url(base_url: httpx.URL, path: str) -> httpx.URL:
 
 def _request_headers(  # pyright: ignore[reportUnusedFunction]
     bearer_key: str,
-    *,
-    json_body: bool = False,
 ) -> dict[str, str]:
     """Build bearer headers from visible ASCII without retaining bad input."""
     if (
@@ -145,35 +147,27 @@ def _request_headers(  # pyright: ignore[reportUnusedFunction]
     ):
         bearer_key = ""
         _raise_transport_failure(transient=False)
-    headers = {"Authorization": f"Bearer {bearer_key}"}
-    if json_body:
-        headers["Content-Type"] = "application/json"
-    return headers
+    return {"Authorization": f"Bearer {bearer_key}"}
 
 
 def _is_valid_session_value(value: object, *, reject_path_shape: bool) -> bool:
     """Return whether one optional session value meets the exact local contract."""
     if value is None:
         return True
-    if type(value) is not str:
-        return False
-    if not 1 <= len(value) <= _MAX_SESSION_VALUE_LENGTH:
-        return False
-    if any(
-        not _VISIBLE_ASCII_MIN <= ord(character) <= _VISIBLE_ASCII_MAX
-        for character in value
-    ):
+    try:
+        validated = _require_lifecycle_text(value)
+    except ValueError:
         return False
     return not (
         reject_path_shape
         and (
-            ".." in value
-            or "/" in value
-            or "\\" in value
+            ".." in validated
+            or "/" in validated
+            or "\\" in validated
             or (
-                len(value) >= _WINDOWS_DRIVE_PREFIX_LENGTH
-                and value[0].isalpha()
-                and value[1] == ":"
+                len(validated) >= _WINDOWS_DRIVE_PREFIX_LENGTH
+                and validated[0].isalpha()
+                and validated[1] == ":"
             )
         )
     )
@@ -197,7 +191,6 @@ def _chat_request_headers(
         return None
 
     request_headers = dict(headers)
-    request_headers["Content-Type"] = "application/json"
     if session_id is not None:
         request_headers["X-Hermes-Session-Id"] = session_id
     if session_key is not None:
@@ -463,6 +456,7 @@ async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]  # noqa:
             timeout=_CHAT_STREAM_TIMEOUT,
             follow_redirects=False,
         ) as response:
+            request_headers.clear()
             try:
                 try:
                     response.raise_for_status()
@@ -624,28 +618,23 @@ class HermesAgentApiClient:
         if cleanup_failed:
             _raise_transport_failure(transient=True)
 
-    def _require_active_client(self) -> httpx.AsyncClient:
-        """Return the active HTTP client or reject out-of-lifecycle use."""
+    def _operation_bindings(
+        self,
+    ) -> tuple[httpx.AsyncClient, httpx.URL, Mapping[str, str]] | None:
+        """Return active immutable operation bindings, if available."""
         active = self._active_http_client
         if active is None:
-            del self
-            _raise_inactive_client()
-        return active
+            return None
+        return active, self._base_url, self._headers
 
     async def probe_capabilities(self) -> HermesCapabilities:
         """Fetch capabilities using this client's bound endpoint and auth."""
-        active: httpx.AsyncClient | None = None
-        inactive = False
-        try:
-            active = self._require_active_client()
-        except RuntimeError as failure:
-            failure.__traceback__ = None
-            inactive = True
-        if inactive or active is None:
-            del self
+        bindings = self._operation_bindings()
+        if bindings is None:
+            del self, bindings
             _raise_inactive_client()
-        base_url: httpx.URL | None = self._base_url
-        headers: Mapping[str, str] = self._headers
+        active, base_url, headers = bindings
+        bindings = None
         del self
         result: HermesCapabilities | None = None
         failure: BaseException | None = None
@@ -661,7 +650,7 @@ class HermesAgentApiClient:
             _reraise_scrubbed_failure(failure)
         return cast("HermesCapabilities", result)
 
-    async def stream_chat_events(  # noqa: C901 - explicit secret cleanup
+    async def stream_chat_events(
         self,
         request: Mapping[str, object],
         *,
@@ -669,19 +658,13 @@ class HermesAgentApiClient:
         session_key: str | None = None,
     ) -> AsyncIterator[HermesEvent]:
         """Stream chat events using this client's bound endpoint and auth."""
-        active: httpx.AsyncClient | None = None
-        inactive = False
-        try:
-            active = self._require_active_client()
-        except RuntimeError as failure:
-            failure.__traceback__ = None
-            inactive = True
-        if inactive or active is None:
+        bindings = self._operation_bindings()
+        if bindings is None:
             request, session_id, session_key = {}, None, None
-            del self
+            del self, bindings
             _raise_inactive_client()
-        base_url: httpx.URL | None = self._base_url
-        headers: Mapping[str, str] = self._headers
+        active, base_url, headers = bindings
+        bindings = None
         del self
         operation_headers = _chat_request_headers(
             headers,
