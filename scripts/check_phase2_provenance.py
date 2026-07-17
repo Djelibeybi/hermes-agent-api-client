@@ -103,7 +103,7 @@ def _load_object(path: Path) -> dict[str, Any]:
     failed = False
     try:
         value = json.loads(path.read_bytes())
-    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
+    except (OSError, UnicodeError, ValueError, RecursionError):
         failed = True
         value = None
     if failed:
@@ -390,8 +390,21 @@ def _verify_reproduction(entry: Mapping[str, Any]) -> None:
 
 
 def _safe_fixture_path(version_root: Path, relative: str) -> Path:
-    path = (version_root / relative).resolve()
-    if not path.is_relative_to(version_root.resolve()):
+    if "\0" in relative:
+        relative = ""
+        _fail("invalid-fixture-path")
+    failed = False
+    try:
+        root = version_root.resolve()
+        path = (root / relative).resolve()
+    except (OSError, RuntimeError, ValueError):
+        failed = True
+        root = version_root
+        path = version_root
+    if failed:
+        relative = ""
+        _fail("invalid-fixture-path")
+    if not path.is_relative_to(root):
         _fail("fixture-path-escape")
     return path
 
@@ -503,7 +516,7 @@ def _json_pairs(data: str) -> object:
     failed = False
     try:
         value = json.loads(data, object_pairs_hook=_json_object_pairs_hook)
-    except (json.JSONDecodeError, RecursionError):
+    except (ValueError, RecursionError):
         failed = True
         value = None
     if failed:
@@ -712,7 +725,12 @@ def _verify_design_matrix(  # noqa: C901, PLR0912
     matrix = _load_object(path)
     if matrix.get("schema_version") != 1:
         _fail("terminal-matrix-schema-version")
-    if set(matrix.get("decision_refs", [])) != _DECISIONS:
+    matrix_refs = matrix.get("decision_refs")
+    if (
+        not isinstance(matrix_refs, list)
+        or any(type(ref) is not str for ref in matrix_refs)
+        or set(matrix_refs) != _DECISIONS
+    ):
         _fail("terminal-matrix-decision-set")
     cases = matrix.get("cases")
     if not isinstance(cases, list) or not cases:
@@ -732,10 +750,17 @@ def _verify_design_matrix(  # noqa: C901, PLR0912
         refs = case.get("decision_refs")
         if not isinstance(wire, dict) or not isinstance(expected, dict):
             _fail("invalid-terminal-case-shape")
-        if not isinstance(refs, list) or not refs or not set(refs) <= _DECISIONS:
+        if (
+            not isinstance(refs, list)
+            or not refs
+            or any(type(ref) is not str for ref in refs)
+            or not set(refs) <= _DECISIONS
+        ):
             _fail("invalid-terminal-case-citations")
         finish = wire.get("finish_reason")
-        required = required_by_finish.get(cast("str", finish))
+        if type(finish) is not str:
+            _fail("missing-applicable-terminal-citation")
+        required = required_by_finish.get(finish)
         if required is None or required not in refs:
             _fail("missing-applicable-terminal-citation")
         if "hermes" in wire and _contains_none(wire["hermes"]) and "D-04" not in refs:

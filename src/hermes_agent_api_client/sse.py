@@ -82,7 +82,7 @@ def _load_json_safely(data: str) -> tuple[bool, object]:
     """Parse JSON without retaining a value-bearing parser exception."""
     try:
         return (True, json.loads(data, object_pairs_hook=_json_object_pairs_hook))
-    except (json.JSONDecodeError, RecursionError, UnicodeError):
+    except (ValueError, RecursionError, UnicodeError):
         return (False, None)
 
 
