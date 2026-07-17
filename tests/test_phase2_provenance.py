@@ -743,7 +743,7 @@ def test_main_prints_one_closed_code_for_real_canary_failure(
     evidence = _release_evidence(
         provenance,
         tmp_path,
-        release="v-test-canonical",
+        release="v9999.1",
         name="cli-canary",
         canonical_scope=True,
     )

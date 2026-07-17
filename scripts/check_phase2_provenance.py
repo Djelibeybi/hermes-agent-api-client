@@ -14,6 +14,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
+from hermes_agent_api_client.protocol import (
+    _MISSING_JSON_MEMBER,  # pyright: ignore[reportPrivateUsage]
+    _json_object_pairs_hook,  # pyright: ignore[reportPrivateUsage]
+    _project_chat_chunk_object,  # pyright: ignore[reportPrivateUsage]
+    _project_tool_progress_object,  # pyright: ignore[reportPrivateUsage]
+)
+
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
@@ -65,7 +72,7 @@ class _ReleaseIdentity:
 
 
 def _fail(message: str) -> NoReturn:
-    raise ProvenanceError(message)
+    raise ProvenanceError(message) from None
 
 
 def _run_git(*arguments: str, cwd: Path | None = None) -> str:
@@ -73,6 +80,8 @@ def _run_git(*arguments: str, cwd: Path | None = None) -> str:
     executable = shutil.which("git")
     if executable is None:
         _fail("latest-tag-verification-blocked")
+    failed = False
+    completed: subprocess.CompletedProcess[str] | None = None
     try:
         completed = subprocess.run(  # noqa: S603 - fixed executable and arguments
             (executable, *arguments),
@@ -82,6 +91,8 @@ def _run_git(*arguments: str, cwd: Path | None = None) -> str:
             text=True,
         )
     except OSError:
+        failed = True
+    if failed or completed is None:
         _fail("latest-tag-verification-blocked")
     if completed.returncode != 0:
         _fail("latest-tag-verification-blocked")
@@ -89,9 +100,13 @@ def _run_git(*arguments: str, cwd: Path | None = None) -> str:
 
 
 def _load_object(path: Path) -> dict[str, Any]:
+    failed = False
     try:
         value = json.loads(path.read_bytes())
     except (OSError, UnicodeError, json.JSONDecodeError):
+        failed = True
+        value = None
+    if failed:
         _fail("invalid-provenance-json")
     if not isinstance(value, dict):
         _fail("expected-provenance-object")
@@ -99,14 +114,15 @@ def _load_object(path: Path) -> dict[str, Any]:
 
 
 def _require_string(value: object, field: str) -> str:
+    del field
     if type(value) is not str or not value:
-        _fail(f"invalid-{field}")
-    return cast("str", value)
+        _fail("invalid-required-string")
+    return value
 
 
 def _require_string_list(value: object, field: str) -> list[str]:
     if not isinstance(value, list) or not value:
-        _fail(f"invalid-{field}")
+        _fail("invalid-required-string-list")
     return [_require_string(item, field) for item in value]
 
 
@@ -171,7 +187,7 @@ def _verify_release_record(
     }
     for field, value in expected.items():
         if release.get(field) != value:
-            _fail(f"release-verification-mismatch:{field}")
+            _fail("release-verification-mismatch")
     disposition = release.get("compatibility_disposition")
     if latest == _CANONICAL_TAG:
         if disposition != "canonical-current":
@@ -245,7 +261,7 @@ def _verify_difference_changes(changes: list[object]) -> None:
             "public_event",
         ):
             if field not in change:
-                _fail(f"incomplete-newer-tag-change:{field}")
+                _fail("incomplete-newer-tag-change")
 
 
 def _verify_newer_release(
@@ -309,14 +325,18 @@ def _fetch_source_tree(
 
 def _source_lines(source_root: Path, path: str, start: int, end: int) -> bytes:
     if path not in _ALLOWED_SOURCE_PATHS:
-        _fail(f"unapproved-source-path:{path}")
+        _fail("unapproved-source-path")
     source_path = source_root / path
+    failed = False
     try:
         lines = source_path.read_bytes().splitlines(keepends=True)
     except OSError:
-        _fail(f"missing-source-path:{path}")
+        failed = True
+        lines = []
+    if failed:
+        _fail("missing-source-path")
     if start < 1 or end < start or end > len(lines):
-        _fail(f"invalid-source-anchor:{path}:L{start}-L{end}")
+        _fail("invalid-source-anchor")
     return b"".join(lines[start - 1 : end])
 
 
@@ -335,7 +355,7 @@ def _verify_structured_source_ref(
     anchor = _source_lines(source_root, path, start, end)
     expected_hash = hashlib.sha256(anchor).hexdigest()
     if source_ref.get("anchor_sha256") != expected_hash:
-        _fail(f"source-anchor-hash-mismatch:{path}:L{start}-L{end}")
+        _fail("source-anchor-hash-mismatch")
     expected_url = f"{_REPOSITORY}/blob/{commit}/{path}#L{start}-L{end}"
     if source_ref.get("url") != expected_url:
         _fail("source-ref-url-mismatch")
@@ -398,12 +418,16 @@ def _verify_fixture_entry(
     if commit != expected_commit:
         _fail("fixture-commit-mismatch")
     fixture = _safe_fixture_path(version_root, relative)
+    failed = False
     try:
         payload = fixture.read_bytes()
     except OSError:
-        _fail(f"missing-fixture:{relative}")
+        failed = True
+        payload = b""
+    if failed:
+        _fail("missing-fixture")
     if entry.get("sha256") != hashlib.sha256(payload).hexdigest():
-        _fail(f"fixture-hash-mismatch:{relative}")
+        _fail("fixture-hash-mismatch")
     _require_string(entry.get("evidence_kind"), "evidence-kind")
     _verify_reproduction(entry)
     _require_string_list(entry.get("semantic_assertions"), "semantic-assertions")
@@ -417,10 +441,10 @@ def _verify_fixture_entry(
         )
         return
     if not isinstance(source_refs, list) or not source_refs:
-        _fail(f"missing-source-refs:{relative}")
+        _fail("missing-source-refs")
     for source_ref in source_refs:
         if not isinstance(source_ref, dict):
-            _fail(f"invalid-source-ref:{relative}")
+            _fail("invalid-source-ref")
         _verify_structured_source_ref(source_ref, source_root, expected_commit)
 
 
@@ -434,15 +458,31 @@ def _fixture_entries(provenance: Mapping[str, Any]) -> dict[str, Mapping[str, An
             _fail("invalid-fixture-entry")
         path = _require_string(entry.get("path"), "fixture-path")
         if path in entries:
-            _fail(f"duplicate-fixture-entry:{path}")
+            _fail("duplicate-fixture-entry")
         entries[path] = entry
     return entries
 
 
+def _read_fixture_bytes(path: Path) -> bytes:
+    failed = False
+    try:
+        payload = path.read_bytes()
+    except OSError:
+        failed = True
+        payload = b""
+    if failed:
+        _fail("fixture-read-failed")
+    return payload
+
+
 def _sse_data(payload: bytes) -> list[tuple[str | None, str]]:
+    failed = False
     try:
         text = payload.decode("utf-8")
     except UnicodeDecodeError:
+        failed = True
+        text = ""
+    if failed:
         _fail("fixture-is-not-utf8")
     records: list[tuple[str | None, str]] = []
     for block in text.strip().split("\n\n"):
@@ -459,22 +499,47 @@ def _sse_data(payload: bytes) -> list[tuple[str | None, str]]:
     return records
 
 
-def _json_object(data: str) -> dict[str, Any]:
+def _json_pairs(data: str) -> object:
+    failed = False
     try:
-        value = json.loads(data)
+        value = json.loads(data, object_pairs_hook=_json_object_pairs_hook)
     except json.JSONDecodeError:
+        failed = True
+        value = None
+    if failed:
         _fail("invalid-sse-json")
-    if not isinstance(value, dict):
-        _fail("sse-data-is-not-object")
-    return cast("dict[str, Any]", value)
+    return value
+
+
+def _tool_json_object(data: str) -> dict[str, object]:
+    projected = _project_tool_progress_object(_json_pairs(data))
+    if projected is None:
+        _fail("invalid-tool-fixture-object")
+    return projected
+
+
+def _chat_json_object(data: str) -> dict[str, Any]:
+    projected = _project_chat_chunk_object(_json_pairs(data))
+    if projected is None:
+        _fail("invalid-chat-fixture-object")
+    document = cast("dict[str, Any]", projected.document)
+    metadata = projected.terminal_metadata
+    if metadata.root_present:
+        hermes: dict[str, object] = {}
+        for field in ("completed", "failed", "partial", "error_code"):
+            value = getattr(metadata, field)
+            if value is not _MISSING_JSON_MEMBER:
+                hermes[field] = value
+        document["hermes"] = hermes
+    return document
 
 
 def _verify_tool_fixture(path: Path) -> None:
-    records = _sse_data(path.read_bytes())
+    records = _sse_data(_read_fixture_bytes(path))
     if len(records) != 4:  # noqa: PLR2004 - fixed complete evidence sequence
         _fail("tool-fixture-record-count")
-    running = _json_object(records[0][1])
-    completed = _json_object(records[1][1])
+    running = _tool_json_object(records[0][1])
+    completed = _tool_json_object(records[1][1])
     if records[0][0] != "hermes.tool.progress" or records[1][0] != (
         "hermes.tool.progress"
     ):
@@ -487,9 +552,7 @@ def _verify_tool_fixture(path: Path) -> None:
         _fail("tool-fixture-correlation")
     if running.get("tool") != completed.get("tool"):
         _fail("tool-fixture-name-mismatch")
-    if "emoji" not in running or "label" not in running:
-        _fail("tool-fixture-missing-tag-additive-fields")
-    terminal = _json_object(records[2][1])
+    terminal = _chat_json_object(records[2][1])
     choices = terminal.get("choices")
     if (
         not isinstance(choices, list)
@@ -504,29 +567,29 @@ def _verify_tool_fixture(path: Path) -> None:
 
 
 def _verify_terminal_sse(path: Path, expected: Mapping[str, object]) -> None:
-    payload = path.read_bytes()
+    payload = _read_fixture_bytes(path)
     if not payload.endswith(b"\n\n"):
-        _fail(f"unterminated-terminal-fixture:{path.name}")
+        _fail("unterminated-terminal-fixture")
     records = _sse_data(payload)
     if len(records) != _TERMINAL_RECORD_COUNT or records[1] != (None, "[DONE]"):
-        _fail(f"invalid-terminal-fixture:{path.name}")
-    document = _json_object(records[0][1])
+        _fail("invalid-terminal-fixture")
+    document = _chat_json_object(records[0][1])
     choices = document.get("choices")
     if not isinstance(choices, list) or len(choices) != 1:
-        _fail(f"invalid-terminal-choice:{path.name}")
+        _fail("invalid-terminal-choice")
     choice = choices[0]
     if not isinstance(choice, dict) or choice.get("finish_reason") != expected.get(
         "finish_reason"
     ):
-        _fail(f"terminal-finish-reason-mismatch:{path.name}")
+        _fail("terminal-finish-reason-mismatch")
     hermes = document.get("hermes")
     if not isinstance(hermes, dict):
-        _fail(f"missing-terminal-hermes:{path.name}")
+        _fail("missing-terminal-hermes")
     for field in ("completed", "partial", "failed", "error_code"):
         if hermes.get(field) != expected.get(field):
-            _fail(f"terminal-field-mismatch:{path.name}:{field}")
-    if "error" not in document or "error" not in hermes:
-        _fail(f"missing-raw-error-canary:{path.name}")
+            _fail("terminal-field-mismatch")
+    if "error" not in document:
+        _fail("missing-raw-error-canary")
 
 
 def _contains_none(value: object) -> bool:
@@ -627,11 +690,11 @@ def _normalized_terminal_event(
 
 
 def _verify_accepted_public_event(
-    case_id: str, wire: Mapping[str, Any], public_event: Mapping[str, Any]
+    wire: Mapping[str, Any], public_event: Mapping[str, Any]
 ) -> tuple[str, bool, str | None]:
     normalized = _normalized_terminal_event(wire)
     if normalized is None:
-        _fail(f"invalid-accepted-terminal-row:{case_id}")
+        _fail("invalid-accepted-terminal-row")
     outcome, partial, failure_reason = normalized
     expected = {
         "outcome": outcome,
@@ -639,7 +702,7 @@ def _verify_accepted_public_event(
         "failure_reason": failure_reason,
     }
     if public_event != expected:
-        _fail(f"public-event-semantics-mismatch:{case_id}")
+        _fail("public-event-semantics-mismatch")
     return normalized
 
 
@@ -662,47 +725,47 @@ def _verify_design_matrix(  # noqa: C901, PLR0912
             _fail("invalid-terminal-matrix-case")
         case_id = _require_string(case.get("id"), "terminal-case-id")
         if case_id in seen:
-            _fail(f"duplicate-terminal-case:{case_id}")
+            _fail("duplicate-terminal-case")
         seen.add(case_id)
         wire = case.get("wire")
         expected = case.get("expected")
         refs = case.get("decision_refs")
         if not isinstance(wire, dict) or not isinstance(expected, dict):
-            _fail(f"invalid-terminal-case-shape:{case_id}")
+            _fail("invalid-terminal-case-shape")
         if not isinstance(refs, list) or not refs or not set(refs) <= _DECISIONS:
-            _fail(f"invalid-terminal-case-citations:{case_id}")
+            _fail("invalid-terminal-case-citations")
         finish = wire.get("finish_reason")
         required = required_by_finish.get(cast("str", finish))
         if required is None or required not in refs:
-            _fail(f"missing-applicable-terminal-citation:{case_id}")
+            _fail("missing-applicable-terminal-citation")
         if "hermes" in wire and _contains_none(wire["hermes"]) and "D-04" not in refs:
-            _fail(f"missing-null-citation:{case_id}")
+            _fail("missing-null-citation")
         disposition = expected.get("disposition")
         if disposition == "accept":
             public_event = expected.get("public_event")
             if not isinstance(public_event, dict):
-                _fail(f"missing-public-event:{case_id}")
+                _fail("missing-public-event")
             if set(public_event) != {"outcome", "partial", "failure_reason"}:
-                _fail(f"invalid-public-event:{case_id}")
-            normalized = _verify_accepted_public_event(case_id, wire, public_event)
+                _fail("invalid-public-event")
+            normalized = _verify_accepted_public_event(wire, public_event)
             normalized_cases.append(("design", case_id, "accept", *normalized))
         elif disposition == "reject":
             if expected.get("error") != "HermesProtocolError":
-                _fail(f"invalid-rejection:{case_id}")
+                _fail("invalid-rejection")
             if _normalized_terminal_event(wire) is not None:
-                _fail(f"accepted-design-rejection:{case_id}")
+                _fail("accepted-design-rejection")
             normalized_cases.append(("design", case_id, "reject"))
         else:
-            _fail(f"invalid-terminal-disposition:{case_id}")
+            _fail("invalid-terminal-disposition")
     return tuple(normalized_cases)
 
 
 def _normalize_tool_events(path: Path) -> tuple[object, ...]:
     _verify_tool_fixture(path)
-    records = _sse_data(path.read_bytes())
+    records = _sse_data(_read_fixture_bytes(path))
     normalized: list[object] = []
     for _, data in records[:2]:
-        document = _json_object(data)
+        document = _tool_json_object(data)
         tool_call_id = document.get("toolCallId")
         tool_name = document.get("tool")
         status = document.get("status")
@@ -711,7 +774,7 @@ def _normalize_tool_events(path: Path) -> tuple[object, ...]:
         if status not in {"running", "completed"}:
             _fail("invalid-tool-lifecycle-status")
         normalized.append(("tool", tool_call_id, tool_name, status))
-    terminal = _json_object(records[2][1])
+    terminal = _chat_json_object(records[2][1])
     choices = cast("list[dict[str, Any]]", terminal["choices"])
     event = _normalized_terminal_event(
         {"finish_reason": choices[0].get("finish_reason")}
@@ -729,7 +792,7 @@ def _normalize_terminal_fixture(
     expect_rejection: bool,
 ) -> tuple[object, ...]:
     _verify_terminal_sse(path, expected)
-    document = _json_object(_sse_data(path.read_bytes())[0][1])
+    document = _chat_json_object(_sse_data(_read_fixture_bytes(path))[0][1])
     choices = cast("list[dict[str, Any]]", document["choices"])
     hermes = cast("dict[str, Any]", document["hermes"])
     event = _normalized_terminal_event(
@@ -750,9 +813,10 @@ def _normalize_terminal_fixture(
 def _normalize_lifecycle_events(
     entries: Mapping[str, Mapping[str, Any]], version_root: Path
 ) -> tuple[object, ...]:
-    for path in _EXPECTED_KINDS:
-        if path not in entries:
-            _fail("missing-required-lifecycle-evidence")
+    for path, expected_kind in _EXPECTED_KINDS.items():
+        entry = entries.get(path)
+        if entry is None or entry.get("evidence_kind") != expected_kind:
+            _fail("lifecycle-evidence-role-mismatch")
 
     normalized: list[object] = []
     tool_path = "chat_completions/tool_progress_pair.sse"
@@ -879,7 +943,7 @@ def _verify_scope(scope: str) -> None:
             if path == "chat_completions/tool_progress_pair.sse":
                 continue
             if entries.get(path, {}).get("evidence_kind") != expected_kind:
-                _fail(f"terminal-evidence-kind-mismatch:{path}")
+                _fail("terminal-evidence-kind-mismatch")
         _verify_terminal_sse(
             _CANONICAL_ROOT / "chat_completions/terminal_length.sse",
             {
