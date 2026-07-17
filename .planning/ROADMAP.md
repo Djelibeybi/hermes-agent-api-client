@@ -16,7 +16,7 @@ policy remain owned by `hermes-conversation`.
 
 ## Phases
 
-- [x] **Phase 2: Conversation Event Contract** — Expose bounded correlated tool progress and strict safe terminal metadata without raw upstream data. (completed 2026-07-16)
+- [ ] **Phase 2: Conversation Event Contract** — Expose bounded correlated tool progress and strict safe terminal metadata without raw upstream data.
 - [ ] **Phase 3: Session Header Safety** — Transport independently optional opaque session values with exact validation, secrecy, isolation, and response ownership.
 - [ ] **Phase 4: Contract and Distribution Verification** — Prove the complete v0.3.0 contract from source and built artifacts against current compatible dependencies.
 
@@ -35,7 +35,7 @@ policy remain owned by `hermes-conversation`.
   4. Every duplicate approved terminal key or contradictory `completed`, `failed`, `partial`, `error_code`, and `finish_reason` combination fails as `HermesProtocolError` instead of being resolved by precedence.
   5. Terminal events remain withheld until the response and suffix validate and cleanup succeeds; raw upstream error details stay private, transport disconnects remain transport errors, and cancellation produces no synthetic terminal event.
 
-**Plans:** 5/5 plans complete
+**Plans:** 5/6 plans complete
 
 Plans:
 **Wave 1**
@@ -54,6 +54,10 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 02-05-PLAN.md — Bind provenance to external release identity and validate newer-tag equivalence from immutable evidence bytes.
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 02-06-PLAN.md — Align provenance ambiguity checks, evidence roles, and diagnostics with the production trust boundary.
 
 ### Phase 3: Session Header Safety
 
@@ -91,6 +95,6 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1. Typed Hermes API Client | v0.1.0 | 1/1 | Complete | 2026-07-15 |
-| 2. Conversation Event Contract | v0.3.0 | 5/5 | Complete   | 2026-07-17 |
+| 2. Conversation Event Contract | v0.3.0 | 5/6 | In progress | - |
 | 3. Session Header Safety | v0.3.0 | 0/TBD | Not started | - |
 | 4. Contract and Distribution Verification | v0.3.0 | 0/TBD | Not started | - |
