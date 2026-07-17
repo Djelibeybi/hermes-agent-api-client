@@ -90,7 +90,7 @@ def _run_git(*arguments: str, cwd: Path | None = None) -> str:
             capture_output=True,
             text=True,
         )
-    except OSError:
+    except (OSError, UnicodeError):
         failed = True
     if failed or completed is None:
         _fail("latest-tag-verification-blocked")
@@ -158,7 +158,17 @@ def _version_key(tag: str) -> tuple[int, ...]:
     match = _NUMERIC_TAG.fullmatch(tag)
     if match is None:
         _fail("invalid-numeric-release-tag")
-    return tuple(int(part) for part in match.group("version").split("."))
+    failed = False
+    try:
+        parts = tuple(int(part) for part in match.group("version").split("."))
+    except ValueError:
+        failed = True
+        parts = ()
+    if failed:
+        tag = ""
+        match = None
+        _fail("invalid-numeric-release-tag")
+    return parts
 
 
 def _latest_release(
@@ -276,6 +286,7 @@ def _verify_newer_release(
 
     if canonical_events is None:
         canonical_source, canonical_temporary = _fetch_source_tree(_CANONICAL_COMMIT)
+        selected_error: BaseException | None = None
         try:
             canonical_provenance = _load_object(_PROVENANCE_PATH)
             canonical_entries = _verify_release_manifest(
@@ -288,11 +299,15 @@ def _verify_newer_release(
             canonical_events = _normalize_lifecycle_events(
                 canonical_entries, _CANONICAL_ROOT
             )
-        finally:
-            canonical_temporary.cleanup()
+        except BaseException as error:  # noqa: BLE001 - preserve through cleanup
+            selected_error = error.with_traceback(None)
+        _finish_temporary_directory(canonical_temporary, selected_error)
+        if canonical_events is None:
+            _fail("latest-tag-verification-blocked")
 
     newer_root = _FIXTURE_ROOT / latest
     newer_source, newer_temporary = _fetch_source_tree(latest_commit)
+    selected_error = None
     try:
         newer_provenance = _load_object(newer_root / "provenance.json")
         newer_entries = _verify_release_manifest(
@@ -303,23 +318,64 @@ def _verify_newer_release(
             require_canonical_scope=False,
         )
         newer_events = _normalize_lifecycle_events(newer_entries, newer_root)
-    finally:
-        newer_temporary.cleanup()
-    if newer_events != canonical_events:
-        _fail("newer-tag-public-events-differ")
+        if newer_events != canonical_events:
+            _fail("newer-tag-public-events-differ")
+    except BaseException as error:  # noqa: BLE001 - preserve through cleanup
+        selected_error = error.with_traceback(None)
+    _finish_temporary_directory(newer_temporary, selected_error)
+
+
+def _create_temporary_directory() -> tempfile.TemporaryDirectory[str]:
+    failed = False
+    temporary: tempfile.TemporaryDirectory[str] | None = None
+    try:
+        temporary = tempfile.TemporaryDirectory(prefix="phase2-provenance-")
+    except OSError:
+        failed = True
+    if failed or temporary is None:
+        _fail("latest-tag-verification-blocked")
+    return temporary
+
+
+def _cleanup_temporary_directory(
+    temporary: tempfile.TemporaryDirectory[str],
+) -> bool:
+    failed = False
+    try:
+        temporary.cleanup()
+    except OSError:
+        failed = True
+    return failed
+
+
+def _finish_temporary_directory(
+    temporary: tempfile.TemporaryDirectory[str],
+    selected_error: BaseException | None,
+) -> None:
+    cleanup_failed = _cleanup_temporary_directory(temporary)
+    if selected_error is not None:
+        raise selected_error from None
+    if cleanup_failed:
+        _fail("latest-tag-verification-blocked")
 
 
 def _fetch_source_tree(
     commit: str,
 ) -> tuple[Path, tempfile.TemporaryDirectory[str]]:
-    temporary = tempfile.TemporaryDirectory(prefix="phase2-provenance-")
+    temporary = _create_temporary_directory()
     root = Path(temporary.name)
-    _run_git("init", "-q", cwd=root)
-    _run_git("remote", "add", "origin", _GIT_REPOSITORY, cwd=root)
-    _run_git("fetch", "-q", "--depth", "1", "origin", commit, cwd=root)
-    _run_git("checkout", "-q", "--detach", "FETCH_HEAD", cwd=root)
-    if _run_git("rev-parse", "HEAD", cwd=root).strip() != commit:
-        _fail("detached-source-commit-mismatch")
+    selected_error: BaseException | None = None
+    try:
+        _run_git("init", "-q", cwd=root)
+        _run_git("remote", "add", "origin", _GIT_REPOSITORY, cwd=root)
+        _run_git("fetch", "-q", "--depth", "1", "origin", commit, cwd=root)
+        _run_git("checkout", "-q", "--detach", "FETCH_HEAD", cwd=root)
+        if _run_git("rev-parse", "HEAD", cwd=root).strip() != commit:
+            _fail("detached-source-commit-mismatch")
+    except BaseException as error:  # noqa: BLE001 - preserve through cleanup
+        selected_error = error.with_traceback(None)
+    if selected_error is not None:
+        _finish_temporary_directory(temporary, selected_error)
     return root, temporary
 
 
@@ -368,11 +424,24 @@ def _verify_legacy_source_ref(
     match = _BLOB_URL.fullmatch(url)
     if match is None or match.group("ref") not in {release, commit}:
         _fail("invalid-upstream-url")
+    failed = False
+    try:
+        start = int(match.group("start"))
+        end = int(match.group("end"))
+    except ValueError:
+        failed = True
+        start = 0
+        end = 0
+    if failed:
+        upstream_url = None
+        url = ""
+        match = None
+        _fail("invalid-source-line-anchor")
     _source_lines(
         source_root,
         match.group("path"),
-        int(match.group("start")),
-        int(match.group("end")),
+        start,
+        end,
     )
 
 
@@ -606,12 +675,15 @@ def _verify_terminal_sse(path: Path, expected: Mapping[str, object]) -> None:
 
 
 def _contains_none(value: object) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, dict):
-        return any(_contains_none(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_none(item) for item in value)
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if item is None:
+            return True
+        if type(item) is dict:
+            pending.extend(cast("dict[object, object]", item).values())
+        elif type(item) is list:
+            pending.extend(cast("list[object]", item))
     return False
 
 
@@ -945,6 +1017,7 @@ def _verify_scope(scope: str) -> None:
     latest, latest_commit = _latest_release(objects, peeled)
     provenance = _load_object(_PROVENANCE_PATH)
     source_root, temporary = _fetch_source_tree(_CANONICAL_COMMIT)
+    selected_error: BaseException | None = None
     try:
         entries = _verify_all_entries(provenance, source_root)
         canonical_events = (
@@ -963,48 +1036,49 @@ def _verify_scope(scope: str) -> None:
             if entries.get(path, {}).get("evidence_kind") != _EXPECTED_KINDS[path]:
                 _fail("tool-evidence-kind-mismatch")
             _verify_tool_fixture(_CANONICAL_ROOT / path)
-            return
-        for path, expected_kind in _EXPECTED_KINDS.items():
-            if path == "chat_completions/tool_progress_pair.sse":
-                continue
-            if entries.get(path, {}).get("evidence_kind") != expected_kind:
-                _fail("terminal-evidence-kind-mismatch")
-        _verify_terminal_sse(
-            _CANONICAL_ROOT / "chat_completions/terminal_length.sse",
-            {
-                "finish_reason": "length",
-                "completed": False,
-                "partial": True,
-                "failed": False,
-                "error_code": "output_truncated",
-            },
-        )
-        _verify_terminal_sse(
-            _CANONICAL_ROOT / "chat_completions/terminal_agent_error.sse",
-            {
-                "finish_reason": "error",
-                "completed": False,
-                "partial": False,
-                "failed": True,
-                "error_code": "agent_error",
-            },
-        )
-        _verify_terminal_sse(
-            _CANONICAL_ROOT
-            / "chat_completions/terminal_task_exception_contradiction.sse",
-            {
-                "finish_reason": "error",
-                "completed": True,
-                "partial": False,
-                "failed": True,
-                "error_code": "agent_error",
-            },
-        )
-        _verify_design_matrix(
-            _CANONICAL_ROOT / "chat_completions/terminal_design_matrix.json"
-        )
-    finally:
-        temporary.cleanup()
+        else:
+            for path, expected_kind in _EXPECTED_KINDS.items():
+                if path == "chat_completions/tool_progress_pair.sse":
+                    continue
+                if entries.get(path, {}).get("evidence_kind") != expected_kind:
+                    _fail("terminal-evidence-kind-mismatch")
+            _verify_terminal_sse(
+                _CANONICAL_ROOT / "chat_completions/terminal_length.sse",
+                {
+                    "finish_reason": "length",
+                    "completed": False,
+                    "partial": True,
+                    "failed": False,
+                    "error_code": "output_truncated",
+                },
+            )
+            _verify_terminal_sse(
+                _CANONICAL_ROOT / "chat_completions/terminal_agent_error.sse",
+                {
+                    "finish_reason": "error",
+                    "completed": False,
+                    "partial": False,
+                    "failed": True,
+                    "error_code": "agent_error",
+                },
+            )
+            _verify_terminal_sse(
+                _CANONICAL_ROOT
+                / "chat_completions/terminal_task_exception_contradiction.sse",
+                {
+                    "finish_reason": "error",
+                    "completed": True,
+                    "partial": False,
+                    "failed": True,
+                    "error_code": "agent_error",
+                },
+            )
+            _verify_design_matrix(
+                _CANONICAL_ROOT / "chat_completions/terminal_design_matrix.json"
+            )
+    except BaseException as error:  # noqa: BLE001 - preserve through cleanup
+        selected_error = error.with_traceback(None)
+    _finish_temporary_directory(temporary, selected_error)
 
 
 def _parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
