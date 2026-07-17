@@ -4,8 +4,8 @@ milestone: v0.3.0
 milestone_name: Conversation Contract
 current_phase: 3
 current_phase_name: Session Header Safety
-status: verifying
-stopped_at: Completed 02-06-PLAN.md
+status: planning
+stopped_at: Phase 2 complete; ready to discuss Phase 3
 last_updated: "2026-07-17T02:22:57.078Z"
 last_activity: 2026-07-17
 last_activity_desc: Phase 02 complete, transitioned to Phase 3
@@ -24,16 +24,16 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-07-17)
 
 **Core value:** Python consumers can use a typed, bounded, secret-safe asynchronous client for the documented Hermes Agent API Server boundary without implementing protocol or transport behaviour themselves.
-**Current focus:** Phase 02 — conversation-event-contract
+**Current focus:** Phase 3 — Session Header Safety
 
 ## Current Position
 
 Phase: 3 — Session Header Safety
 Plan: Not started
-Status: Phase complete — ready for verification
+Status: Ready to plan
 Last activity: 2026-07-17 — Phase 02 complete, transitioned to Phase 3
 
-Progress: [██████████] 100%
+Progress: [███░░░░░░░] 33%
 
 ## Accumulated Context
 
@@ -75,8 +75,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-07-17T00:45:33.596Z
-Stopped at: Completed 02-06-PLAN.md
+Last session: 2026-07-17T02:28:21Z
+Stopped at: Phase 2 complete; ready to discuss Phase 3
 Resume file: None
 
 ## Performance Metrics
