@@ -194,9 +194,6 @@ def _chat_request_headers(
         reject_path_shape=False,
     )
     if invalid:
-        headers = {}
-        session_id = None
-        session_key = None
         return None
 
     request_headers = dict(headers)
@@ -664,7 +661,7 @@ class HermesAgentApiClient:
             _reraise_scrubbed_failure(failure)
         return cast("HermesCapabilities", result)
 
-    async def stream_chat_events(  # noqa: C901, PLR0915 - explicit secret cleanup
+    async def stream_chat_events(  # noqa: C901 - explicit secret cleanup
         self,
         request: Mapping[str, object],
         *,
@@ -680,10 +677,12 @@ class HermesAgentApiClient:
             failure.__traceback__ = None
             inactive = True
         if inactive or active is None:
+            request, session_id, session_key = {}, None, None
             del self
             _raise_inactive_client()
         base_url: httpx.URL | None = self._base_url
         headers: Mapping[str, str] = self._headers
+        del self
         operation_headers = _chat_request_headers(
             headers,
             session_id=session_id,
@@ -696,9 +695,7 @@ class HermesAgentApiClient:
             active = None
             base_url = None
             request = {}
-            del self
             _raise_transport_failure(transient=False)
-        del self
         event: HermesEvent | None = None
         operation_failure: BaseException | None = None
         delegated_stream: AsyncIterator[HermesEvent] | None = aiter(
@@ -727,7 +724,6 @@ class HermesAgentApiClient:
                         operation_failure = caught
         active = None
         base_url = None
-        headers = {}
         request = {}
         event = None
         delegated_stream = None

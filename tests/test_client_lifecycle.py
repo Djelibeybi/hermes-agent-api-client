@@ -319,12 +319,26 @@ async def _assert_operations_inactive(client: HermesAgentApiClient) -> None:
         client=client,
     )
 
+    request = {"private": "inactive-request-canary"}
     with pytest.raises(RuntimeError) as stream_failure:
-        await anext(client.stream_chat_events({}))
+        await anext(
+            client.stream_chat_events(
+                request,
+                session_id="inactive-session-canary",
+                session_key="inactive-key-canary",
+            )
+        )
     _assert_safe_lifecycle_error(
         stream_failure.value,
         expected_message=_INACTIVE_MESSAGE,
         client=client,
+        canaries=(
+            _BASE_URL_CANARY,
+            _BEARER_KEY_CANARY,
+            "inactive-request-canary",
+            "inactive-session-canary",
+            "inactive-key-canary",
+        ),
     )
 
 
@@ -574,17 +588,30 @@ async def test_path_shaped_session_ids_fail_before_dispatch(
                 if len(invalid_session_id) >= _MIN_UNIQUE_CANARY_LENGTH
                 else ()
             ),
-            forbidden_objects=(client, injected_http_client),
+            forbidden_objects=(
+                invalid_session_id,
+                client,
+                injected_http_client,
+            ),
         )
     finally:
         await injected_http_client.aclose()
 
 
 @pytest.mark.asyncio
-async def test_invalid_session_pair_is_atomic_and_secret_free() -> None:
+@pytest.mark.parametrize(
+    ("session_id", "session_key"),
+    [
+        ("valid-session-id-canary", "invalid session-key-canary"),
+        ("invalid session-id-canary", "valid-session-key-canary"),
+    ],
+    ids=["invalid-key", "invalid-id"],
+)
+async def test_invalid_session_pair_is_atomic_and_secret_free(
+    session_id: str,
+    session_key: str,
+) -> None:
     """One invalid value prevents dispatch without retaining either value."""
-    session_id = "valid-session-id-canary"
-    session_key = "invalid session-key-canary"
     requests: list[httpx.Request] = []
     injected_http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(_successful_transport(requests))
