@@ -8,7 +8,7 @@ import ssl
 import traceback
 from contextlib import asynccontextmanager
 from types import MappingProxyType
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 from unittest.mock import patch
 
 import httpx
@@ -46,7 +46,7 @@ if TYPE_CHECKING:
         Iterable,
         Mapping,
     )
-    from types import TracebackType
+    from types import FrameType, TracebackType
 
 
 _INACTIVE_MESSAGE = "HermesAgentApiClient is not active"
@@ -56,6 +56,7 @@ _BASE_URL_CANARY = "https://hermes.example/private-base"
 _BEARER_KEY_CANARY = "lifecycle-bearer-key-canary"
 _UPSTREAM_STATUS_CODE = 503
 _UPSTREAM_STATUS_MESSAGE = "upstream status"
+_MIN_UNIQUE_CANARY_LENGTH = 4
 
 
 class AsyncClientFactorySpy:
@@ -208,6 +209,15 @@ class FailingCloseHermesEvents:
         raise self.close_cancellation
 
 
+class _HasAsyncGeneratorFrame(Protocol):
+    """Structural view of the CPython async-generator inspection surface."""
+
+    @property
+    def ag_frame(self) -> FrameType | None:
+        """Return the retained generator frame, if the generator is open."""
+        ...
+
+
 def _package_traceback_locals(error: BaseException) -> tuple[dict[str, object], ...]:
     """Snapshot package-owned traceback locals for lifecycle secrecy checks."""
     frames: list[dict[str, object]] = []
@@ -309,12 +319,26 @@ async def _assert_operations_inactive(client: HermesAgentApiClient) -> None:
         client=client,
     )
 
+    request = {"private": "inactive-request-canary"}
     with pytest.raises(RuntimeError) as stream_failure:
-        await anext(client.stream_chat_events({}))
+        await anext(
+            client.stream_chat_events(
+                request,
+                session_id="inactive-session-canary",
+                session_key="inactive-key-canary",
+            )
+        )
     _assert_safe_lifecycle_error(
         stream_failure.value,
         expected_message=_INACTIVE_MESSAGE,
         client=client,
+        canaries=(
+            _BASE_URL_CANARY,
+            _BEARER_KEY_CANARY,
+            "inactive-request-canary",
+            "inactive-session-canary",
+            "inactive-key-canary",
+        ),
     )
 
 
@@ -352,6 +376,333 @@ def _advertise_unsupported_chat(document: dict[str, object]) -> None:
     """Make one otherwise-supported document fail required chat support."""
     features = cast("dict[str, object]", document["features"])
     features["chat_completions"] = "public-capability-body-canary"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("session_id", "session_key", "expected_headers"),
+    [
+        (None, None, {}),
+        ("profile.chat-001", None, {"X-Hermes-Session-Id": "profile.chat-001"}),
+        (None, "instance-key-001", {"X-Hermes-Session-Key": "instance-key-001"}),
+        ("!", None, {"X-Hermes-Session-Id": "!"}),
+        ("~" * 256, None, {"X-Hermes-Session-Id": "~" * 256}),
+        (
+            None,
+            "../opaque\\key",
+            {"X-Hermes-Session-Key": "../opaque\\key"},
+        ),
+        (
+            "profile.chat-001",
+            "instance-key-001",
+            {
+                "X-Hermes-Session-Id": "profile.chat-001",
+                "X-Hermes-Session-Key": "instance-key-001",
+            },
+        ),
+    ],
+    ids=[
+        "neither",
+        "session-id",
+        "session-key",
+        "minimum-session-id",
+        "maximum-session-id",
+        "path-shaped-session-key",
+        "both",
+    ],
+)
+async def test_stream_session_headers_are_independent_and_request_scoped(
+    session_id: str | None,
+    session_key: str | None,
+    expected_headers: dict[str, str],
+) -> None:
+    """Session arguments map independently without mutating caller state."""
+    requests: list[httpx.Request] = []
+    request_document: dict[str, object] = {
+        "model": "hermes",
+        "messages": (),
+        "stream": True,
+    }
+    original_document = request_document.copy()
+    injected_http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_successful_transport(requests))
+    )
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    bound_headers = client._headers.copy()  # pyright: ignore[reportPrivateUsage]
+    try:
+        async with client:
+            events = tuple(
+                [
+                    event
+                    async for event in client.stream_chat_events(
+                        request_document,
+                        session_id=session_id,
+                        session_key=session_key,
+                    )
+                ]
+            )
+
+        assert events == (
+            AssistantDeltaEvent(text="hello"),
+            TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+        )
+        assert len(requests) == 1
+        sent = requests[0]
+        for name in ("X-Hermes-Session-Id", "X-Hermes-Session-Key"):
+            if name in expected_headers:
+                assert sent.headers[name] == expected_headers[name]
+            else:
+                assert name not in sent.headers
+        assert request_document == original_document
+        assert client._headers == bound_headers  # pyright: ignore[reportPrivateUsage]
+        assert injected_http_client.is_closed is False
+    finally:
+        await injected_http_client.aclose()
+
+
+class _SessionStringSubclass(str):
+    """A string subclass forbidden by the exact public session contract."""
+
+    __slots__ = ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "",
+        " ",
+        " leading-space",
+        "leading-space ",
+        "embedded space",
+        "line\nbreak",
+        "nul\x00byte",
+        "delete\x7fbyte",
+        "café",
+        "x" * 257,
+        _SessionStringSubclass("subclass-canary"),
+        7,
+    ],
+    ids=[
+        "empty",
+        "space",
+        "leading-space",
+        "trailing-space",
+        "embedded-space",
+        "newline",
+        "nul",
+        "delete",
+        "non-ascii",
+        "too-long",
+        "subclass",
+        "non-string",
+    ],
+)
+@pytest.mark.parametrize("argument", ["session_id", "session_key"])
+async def test_invalid_session_arguments_fail_locally_without_dispatch(
+    argument: str,
+    invalid: object,
+) -> None:
+    """Invalid session values use the safe non-retryable input failure."""
+    requests: list[httpx.Request] = []
+    injected_http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_successful_transport(requests))
+    )
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            if argument == "session_id":
+                stream = client.stream_chat_events(
+                    {"model": "hermes"},
+                    session_id=cast("str", invalid),
+                )
+            else:
+                stream = client.stream_chat_events(
+                    {"model": "hermes"},
+                    session_key=cast("str", invalid),
+                )
+            with pytest.raises(HermesTransportError) as caught:
+                await anext(stream)
+
+        assert caught.value.retryable is False
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        assert requests == []
+        _assert_no_sensitive_traceback_references(
+            caught.value,
+            canaries=(
+                (str(invalid),)
+                if isinstance(invalid, str)
+                and len(invalid.strip()) >= _MIN_UNIQUE_CANARY_LENGTH
+                else ()
+            ),
+            forbidden_objects=(invalid, client, injected_http_client),
+        )
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_session_id",
+    ["..", "profile/child", "profile\\child", "C:profile"],
+    ids=["parent", "slash", "backslash", "drive-prefix"],
+)
+async def test_path_shaped_session_ids_fail_before_dispatch(
+    invalid_session_id: str,
+) -> None:
+    """Transcript identifiers cannot be interpreted as filesystem paths."""
+    requests: list[httpx.Request] = []
+    injected_http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_successful_transport(requests))
+    )
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(HermesTransportError) as caught:
+                await anext(
+                    client.stream_chat_events(
+                        {"model": "hermes"},
+                        session_id=invalid_session_id,
+                    )
+                )
+
+        assert caught.value.retryable is False
+        assert requests == []
+        _assert_no_sensitive_traceback_references(
+            caught.value,
+            canaries=(
+                (invalid_session_id,)
+                if len(invalid_session_id) >= _MIN_UNIQUE_CANARY_LENGTH
+                else ()
+            ),
+            forbidden_objects=(
+                invalid_session_id,
+                client,
+                injected_http_client,
+            ),
+        )
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("session_id", "session_key"),
+    [
+        ("valid-session-id-canary", "invalid session-key-canary"),
+        ("invalid session-id-canary", "valid-session-key-canary"),
+    ],
+    ids=["invalid-key", "invalid-id"],
+)
+async def test_invalid_session_pair_is_atomic_and_secret_free(
+    session_id: str,
+    session_key: str,
+) -> None:
+    """One invalid value prevents dispatch without retaining either value."""
+    requests: list[httpx.Request] = []
+    injected_http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_successful_transport(requests))
+    )
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    try:
+        async with client:
+            with pytest.raises(HermesTransportError) as caught:
+                await anext(
+                    client.stream_chat_events(
+                        {"model": "hermes"},
+                        session_id=session_id,
+                        session_key=session_key,
+                    )
+                )
+
+        assert caught.value.retryable is False
+        assert requests == []
+        _assert_no_sensitive_traceback_references(
+            caught.value,
+            canaries=(session_id, session_key),
+            forbidden_objects=(client, injected_http_client),
+        )
+    finally:
+        await injected_http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_streams_isolate_session_headers() -> None:
+    """Concurrent calls use fresh headers without cross-request contamination."""
+    requests: list[httpx.Request] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0)
+        requests.append(request)
+        return httpx.Response(
+            200,
+            request=request,
+            content=(
+                b'data: {"choices":[{"index":0,"delta":{"content":"ok"},'
+                b'"finish_reason":null}]}\n\ndata: [DONE]\n\n'
+            ),
+        )
+
+    injected_http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client = HermesAgentApiClient(
+        _BASE_URL_CANARY,
+        _BEARER_KEY_CANARY,
+        http_client=injected_http_client,
+    )
+    bound_headers = client._headers.copy()  # pyright: ignore[reportPrivateUsage]
+
+    async def collect(index: int) -> tuple[HermesEvent, ...]:
+        return tuple(
+            [
+                event
+                async for event in client.stream_chat_events(
+                    {"model": "hermes"},
+                    session_id=f"session-{index}",
+                    session_key=f"key-{index}",
+                )
+            ]
+        )
+
+    try:
+        async with client:
+            results = await asyncio.gather(*(collect(index) for index in range(8)))
+
+        assert all(
+            result
+            == (
+                AssistantDeltaEvent(text="ok"),
+                TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+            )
+            for result in results
+        )
+        assert {
+            (
+                request.headers["X-Hermes-Session-Id"],
+                request.headers["X-Hermes-Session-Key"],
+            )
+            for request in requests
+        } == {(f"session-{index}", f"key-{index}") for index in range(8)}
+        assert client._headers == bound_headers  # pyright: ignore[reportPrivateUsage]
+        assert injected_http_client.is_closed is False
+    finally:
+        await injected_http_client.aclose()
 
 
 @pytest.mark.asyncio
@@ -1927,12 +2278,26 @@ async def test_stream_request_cancellation_preserves_identity() -> None:
     )
     try:
         async with client:
+            public_stream = cast(
+                "AsyncGenerator[HermesEvent]",
+                client.stream_chat_events(
+                    {"model": "hermes"},
+                    session_id="cancel-session-canary",
+                    session_key="cancel-key-canary",
+                ),
+            )
             with pytest.raises(asyncio.CancelledError) as failure:
-                await anext(client.stream_chat_events({"model": "hermes"}))
+                await anext(public_stream)
 
         assert failure.value is cancellation
         assert failure.value.__cause__ is None
         assert failure.value.__context__ is None
+        assert cast("_HasAsyncGeneratorFrame", public_stream).ag_frame is None
+        _assert_no_sensitive_traceback_references(
+            failure.value,
+            canaries=("cancel-session-canary", "cancel-key-canary"),
+            forbidden_objects=(client, injected_http_client),
+        )
     finally:
         await injected_http_client.aclose()
 
@@ -1983,7 +2348,9 @@ async def test_closing_public_stream_immediately_closes_delegated_response() -> 
             public_stream = cast(
                 "AsyncGenerator[HermesEvent]",
                 client.stream_chat_events(
-                    {"model": "hermes", "messages": (), "stream": True}
+                    {"model": "hermes", "messages": (), "stream": True},
+                    session_id="early-close-session-canary",
+                    session_key="early-close-key-canary",
                 ),
             )
             assert await anext(public_stream) == AssistantDeltaEvent(text="hello")
@@ -1993,6 +2360,7 @@ async def test_closing_public_stream_immediately_closes_delegated_response() -> 
 
             assert response_stream.closed is True
             assert injected_http_client.is_closed is False
+            assert cast("_HasAsyncGeneratorFrame", public_stream).ag_frame is None
         assert injected_http_client.is_closed is False
     finally:
         await injected_http_client.aclose()

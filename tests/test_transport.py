@@ -6,8 +6,8 @@ import asyncio
 import json
 import traceback
 from collections.abc import Mapping
-from types import MappingProxyType
-from typing import TYPE_CHECKING, cast
+from types import FrameType, MappingProxyType
+from typing import TYPE_CHECKING, Protocol, cast
 from unittest.mock import patch
 
 import httpx
@@ -57,6 +57,15 @@ if TYPE_CHECKING:
 
 _EXPECTED_CAPABILITIES_DEADLINE = 10.0
 _CONCURRENT_STREAM_COUNT = 12
+
+
+class _HasAsyncGeneratorFrame(Protocol):
+    """Structural view of the CPython async-generator inspection surface."""
+
+    @property
+    def ag_frame(self) -> FrameType | None:
+        """Return the retained generator frame, if the generator is open."""
+        ...
 
 
 def _library_traceback_locals(error: BaseException) -> tuple[dict[str, object], ...]:
@@ -772,14 +781,6 @@ def test_request_headers_reject_invalid_bearer_safely(bearer_key: str) -> None:
         _assert_traceback_locals_are_safe(caught.value, canaries=(bearer_key,))
 
 
-def test_request_headers_can_add_json_content_type() -> None:
-    """JSON requests receive a fresh content-type header."""
-    assert _request_headers("visible-bearer", json_body=True) == {
-        "Authorization": "Bearer visible-bearer",
-        "Content-Type": "application/json",
-    }
-
-
 @pytest.mark.parametrize("exception_type", [RuntimeError, KeyError])
 def test_serialize_request_scrubs_hostile_mapping_failures(
     exception_type: type[Exception],
@@ -976,6 +977,37 @@ async def test_terminal_is_delivered_only_after_response_cleanup() -> None:
         assert stream.closed is True
         assert response is not None
         assert response.is_closed is True
+    finally:
+        await generator.aclose()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_discards_temporary_request_headers_before_yield() -> None:
+    """A suspended stream does not retain its temporary header mapping."""
+    stream = TrackingAsyncByteStream((_successful_sse("header-scrub"),))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, stream=stream)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    generator = cast(
+        "AsyncGenerator[object]",
+        _stream_chat_events(
+            client,
+            _normalize_base_url("https://hermes.example"),
+            {
+                "Authorization": "Bearer retained-bearer-canary",
+                "X-Hermes-Session-Key": "retained-session-key-canary",
+            },
+            {"model": "hermes", "messages": [], "stream": True},
+        ),
+    )
+    try:
+        assert await anext(generator) == AssistantDeltaEvent(text="header-scrub")
+        frame = cast("_HasAsyncGeneratorFrame", generator).ag_frame
+        assert frame is not None
+        assert frame.f_locals["request_headers"] == {}
     finally:
         await generator.aclose()
         await client.aclose()

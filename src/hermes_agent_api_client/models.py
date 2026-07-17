@@ -118,6 +118,8 @@ class KeepaliveEvent(_FrozenModel):
 class TerminalEvent(_FrozenModel):
     """An explicit success or typed non-success stream result."""
 
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
     outcome: TerminalOutcome
     partial: bool = False
     failure_reason: TerminalFailureReason | None = None
