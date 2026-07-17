@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.3.1 (2026-07-17)
+
+### Bug Fixes
+
+- Address conversation contract review
+  ([#7](https://github.com/Djelibeybi/hermes-agent-api-client/pull/7),
+  [`8843cfc`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/8843cfc700b76c7e9dad6928008b4095ddffbb49))
+
+- Complete conversation contract
+  ([#7](https://github.com/Djelibeybi/hermes-agent-api-client/pull/7),
+  [`8843cfc`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/8843cfc700b76c7e9dad6928008b4095ddffbb49))
+
+- Finalize session-scoped conversation contract
+  ([#7](https://github.com/Djelibeybi/hermes-agent-api-client/pull/7),
+  [`8843cfc`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/8843cfc700b76c7e9dad6928008b4095ddffbb49))
+
+
 ## v0.3.0 (2026-07-17)
 
 ### Bug Fixes
