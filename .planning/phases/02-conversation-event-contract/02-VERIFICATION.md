@@ -1,10 +1,16 @@
 ---
 phase: 02-conversation-event-contract
-verified: 2026-07-17T02:20:46Z
+verified: 2026-07-17T03:09:07Z
 status: passed
 score: 22/22 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
+freshness_refresh:
+  previous_status: stale
+  trigger: signed-history rewrite and summary task-hash refresh
+  source_test_fixture_dependency_diff: none
+  uat: 24/24 passed
+  live_provenance_scopes: passed
 re_verification:
   previous_status: gaps_found
   previous_score: 11/12
@@ -19,9 +25,11 @@ re_verification:
 # Phase 2: Conversation Event Contract Verification Report
 
 **Phase Goal:** Python consumers receive immutable, bounded tool-progress and terminal events whose wire mapping is ordered, strict, ambiguity-free, and secret-safe.
-**Verified:** 2026-07-17T02:20:46Z
+**Verified:** 2026-07-17T03:09:07Z
 **Status:** passed
 **Re-verification:** Yes - after Plans 02-05 and 02-06 gap closure and post-review hardening
+
+**Freshness refresh:** The signed-history rewrite changed commit identities only, and the six summaries were mechanically updated to reference those rewritten task hashes. `git diff 2c622805..f0f4b39 -- src tests scripts pyproject.toml uv.lock` is empty. The completed UAT records 24/24 passes; its signed commit reran and passed lock validation, Ruff, basedpyright, verifytypes, the 635-test 100%-coverage suite, distribution build, and standalone distribution verification. Both live provenance scopes were rerun against the official tag gate and passed. Dependency currency was also rechecked: only the already-deferred Phase 4 updates for prek 0.4.10 and Ruff 0.15.22 remain.
 
 ## Goal Achievement
 
