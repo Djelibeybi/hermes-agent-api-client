@@ -2,6 +2,274 @@
 
 <!-- version list -->
 
+## v0.3.0 (2026-07-17)
+
+### Bug Fixes
+
+- Classify oversized capability JSON as a protocol failure
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- Close duplicate-member smuggling and realign the provenance gate
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- Confine duplicate-member refusal to approved read paths
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Close malformed JSON input boundaries
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Close recursive JSON error boundary
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Make provenance validation exception-total
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+### Build System
+
+- Drop the uv version pin from CI
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+### Chores
+
+- Archive v0.1.0 milestone files
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- Prune the inherited Home Assistant gitignore
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- Remove archived v0.1.0 phase workspace
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- Update GSD config and store conversation contract
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+### Documentation
+
+- Align v0.3.0 milestone state narrative
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- Complete project research ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- Create milestone v0.3.0 roadmap (3 phases)
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- Cross-AI review for phase 2 ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- Define milestone v0.3.0 requirements
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- Start milestone v0.3.0 Conversation Contract
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Add code review report
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Capture phase context ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Create phase gap closure plan
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Create phase plan ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Create provenance hardening gap plan
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Map conversation event patterns
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Refresh canonical verification after signed rebase
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Refresh task hashes after signoff rebase
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Research conversation event contract
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Revise phase plan from reviews
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Ship phase 02 — PR #5 ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Update code review report
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-01**: Complete strict conversation event vocabulary plan
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-02**: Complete immutable conversation evidence plan
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-03**: Complete pair-aware correlated tool decoding plan
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-04**: Complete total safe terminal metadata plan
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-05**: Complete release-bound provenance integrity plan
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Complete provenance trust-boundary closure plan
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Record malformed input boundary closure
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Record provenance totality closure
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Record recursive JSON boundary closure
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **phase-02**: Add security threat verification
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **phase-02**: Align transition state for phase 3
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **phase-02**: Complete phase execution
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **phase-02**: Evolve PROJECT.md after phase completion
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **phase-02**: Update Nyquist validation strategy
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **phase-2**: Add validation strategy
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **state**: Record phase 2 context session
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+### Features
+
+- **02-01**: Implement strict conversation event vocabulary
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-03**: Implement duplicate-aware tool decoding
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-04**: Implement total terminal metadata contract
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-05**: Bind provenance to validated evidence
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Close provenance trust boundaries
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+### Refactoring
+
+- Verify fixture provenance offline, without shelling out to git
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+### Testing
+
+- Restore the provenance gates the offline rewrite dropped
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02**: Complete UAT - 24 passed, 0 issues
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-01**: Define conversation event vocabulary contract
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-02**: Freeze correlated tool evidence
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-02**: Freeze terminal contract evidence
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-03**: Cover approved chat duplicate paths
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-03**: Define duplicate-aware tool decoding contract
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-04**: Define total terminal metadata contract
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-05**: Expose provenance trust defects
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Cover recursive provenance JSON failures
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Expose malformed JSON boundary escapes
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Expose provenance boundary gaps
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+- **02-06**: Expose remaining provenance exception escapes
+  ([#5](https://github.com/Djelibeybi/hermes-agent-api-client/pull/5),
+  [`354920e`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/354920e7b0dc9fecf25d2fee3e8a5f3b1081e359))
+
+
 ## v0.2.1 (2026-07-16)
 
 ### Bug Fixes
