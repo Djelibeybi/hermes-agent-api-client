@@ -1,15 +1,16 @@
 ---
 phase: 2
 slug: conversation-event-contract
-status: draft
+status: verified
 nyquist_compliant: true
-wave_0_complete: false
+wave_0_complete: true
 created: 2026-07-17
+audited: 2026-07-17
 ---
 
 # Phase 2 — Validation Strategy
 
-> Per-phase validation contract for feedback sampling during execution.
+> Retrospective Nyquist audit of all executed conversation-event contract plans.
 
 ---
 
@@ -19,83 +20,108 @@ created: 2026-07-17
 |----------|-------|
 | **Framework** | pytest 9.1.1, pytest-asyncio 1.4.0, pytest-cov 7.1.0 |
 | **Config file** | `pyproject.toml` |
-| **Quick run command** | `uv run --no-sync pytest tests/test_protocol.py tests/test_sse.py --no-cov -q` |
+| **Task test command** | Use the exact `<automated>` command from each PLAN; pytest selections include `--no-cov` so partial suites do not misrepresent the repository-wide threshold. |
 | **Full suite command** | `uv run --no-sync pytest -q` |
-| **Estimated runtime** | Quick suite under 1 second; full suite under 10 seconds on the research host |
+| **Static gates** | `uv lock --check`, Ruff, basedpyright, and `basedpyright --verifytypes hermes_agent_api_client --ignoreexternal` |
+| **Measured runtime** | Full suite approximately 49 seconds on the audit host; narrower commands range from seconds to the distribution-heavy package selection. |
 
 ---
 
 ## Sampling Rate
 
-- **After every task commit:** Run the narrow test command named by that task; default to `uv run --no-sync pytest tests/test_protocol.py tests/test_sse.py --no-cov -q`.
-- **After every plan wave:** Run `uv run --no-sync pytest -q` so the 100% branch-coverage gate applies.
-- **Before `$gsd-verify-work`:** The full pytest suite, Ruff, basedpyright, and package-root export tests must be green.
-- **Max feedback latency:** 10 seconds for the full suite on the research host.
+- **After every task commit:** Run the task's exact PLAN `<automated>` command.
+- **After every wave:** Run `uv run --no-sync pytest -q` so the 100% statement/branch gate applies.
+- **Before phase closeout:** Run the full suite, lock check, Ruff, basedpyright, verifytypes, both live provenance scopes, and isolated distribution hooks.
+- **Continuity:** Every one of the seven executed tasks has an automated command; there is no three-task validation gap.
 
 ---
 
 ## Per-Task Verification Map
 
-The planner assigns final task IDs. Every requirement below must remain attached to an automated task and its named command.
-
-| Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 02-01-feature | 02-01 | 1 | TOOL-01 | T-02-01 | Exact immutable public enum/model contract and coherent current SSE construction | unit/static/regression | `uv run --no-sync pytest tests/test_protocol.py tests/test_package.py tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| 02-03-feature | 02-03 | 2 | TOOL-02 | T-02-02 | Ordered correlated records remain facts, without synthetic tracking | async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| 02-03-feature | 02-03 | 2 | TOOL-03 | T-02-01 | Approved duplicate/malformed keys fail closed before recursive pair materialization | async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| 02-03-feature | 02-03 | 2 | TOOL-04 | T-02-03 | Raw/additive tool data never enters public state, errors, or frames | security unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| 02-01-feature | 02-01 | 1 | TERM-01 | T-02-01 | Closed immutable terminal vocabulary | unit/static | `uv run --no-sync pytest tests/test_protocol.py tests/test_package.py tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| 02-04-feature | 02-04 | 3 | TERM-02 | T-02-04 | Only the approved stop matrix maps to success; absent finish reason differs from explicit null | parameterized async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| 02-04-feature | 02-04 | 3 | TERM-03 | Only the approved length matrix maps to truncation | parameterized async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| 02-04-feature | 02-04 | 3 | TERM-04 | Exact UPSTREAM_ERROR outcome, partial, and bounded safe error-code mapping | parameterized async unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| 02-04-feature | 02-04 | 3 | TERM-05 | T-02-01, T-02-04 | Duplicates, nulls, and contradictions are never normalized | property-style parameterized unit | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| 02-04-feature | 02-04 | 3 | TERM-06 | T-02-03 | Raw errors remain private; transport and cancellation classifications remain exact | security/regression | `uv run --no-sync pytest tests/test_sse.py tests/test_transport.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-| 02-04-feature | 02-04 | 3 | TERM-07 | T-02-05 | Terminal observation follows suffix validation and cleanup | async integration/regression | `uv run --no-sync pytest tests/test_sse.py tests/test_transport.py --no-cov -q` | ✅ extend existing | ⬜ pending |
-
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
-
-Evidence-task verification is also assigned explicitly:
-
-| Task ID | Plan | Wave | Contract Gate | Automated Command | Status |
-|---------|------|------|---------------|-------------------|--------|
-| 02-02-task-1 | 02-02 | 1 | D-15/D-16 canonical peel, network disposition, and conditional newer-tag comparison | `uv run --no-sync python scripts/check_phase2_provenance.py --scope release-and-tool` | ⬜ pending |
-| 02-02-task-2 | 02-02 | 1 | D-01-D-04/D-09-D-14 terminal evidence, per-row citations, provenance, and hashes | `uv run --no-sync python scripts/check_phase2_provenance.py --scope terminal` | ⬜ pending |
-
-Threat references:
-
-- **T-02-01:** duplicate-key, exact-type, null, and bound bypass at the JSON/protocol boundary.
-- **T-02-02:** lifecycle reordering or synthetic reconciliation hides interruption state.
-- **T-02-03:** raw tool/error data leaks through values, exceptions, frames, or retained state.
-- **T-02-04:** contradictory terminal facts are normalized by precedence instead of rejected.
-- **T-02-05:** a terminal event becomes visible before suffix validation or cleanup completes.
+| Task ID | Plan | Wave | Requirements | Automated Command | Current Evidence | Status |
+|---------|------|------|--------------|-------------------|------------------|--------|
+| 02-01-task-1 | 02-01 | 1 | TOOL-01, TOOL-02, TERM-01 | `uv run --no-sync pytest tests/test_protocol.py tests/test_package.py tests/test_sse.py --no-cov -q` | Public vocabulary, exact bounds/types, immutable models, exports, and SSE construction tests pass. | ✅ green |
+| 02-02-task-1 | 02-02 | 1 | TOOL-02, TOOL-03, TOOL-04 | `uv run --no-sync python scripts/check_phase2_provenance.py --scope release-and-tool` | Live canonical/latest identity, immutable tool fixture, hashes, anchors, and ordered correlation pass. | ✅ green |
+| 02-02-task-2 | 02-02 | 1 | TERM-02, TERM-03, TERM-04, TERM-05, TERM-06 | `uv run --no-sync python scripts/check_phase2_provenance.py --scope terminal` | Live terminal fixtures, evidence roles, design rows, citations, and hashes pass. | ✅ green |
+| 02-03-task-1 | 02-03 | 2 | TOOL-02, TOOL-03, TOOL-04 | `uv run --no-sync pytest tests/test_sse.py --no-cov -q` | Pair preservation, duplicate rejection, correlation/order, repetition, interruption, recursion, and secrecy tests pass. | ✅ green |
+| 02-04-task-1 | 02-04 | 3 | TERM-02, TERM-03, TERM-04, TERM-05, TERM-06, TERM-07 | `uv run --no-sync pytest tests/test_sse.py tests/test_transport.py --no-cov -q` | Total terminal matrix, contradiction, raw-error secrecy, cancellation, cleanup precedence, and delayed delivery tests pass. | ✅ green |
+| 02-05-task-1 | 02-05 | 4 | TOOL-02, TERM-02, TERM-03, TERM-04, TERM-05 | `uv run --no-sync pytest tests/test_phase2_provenance.py --no-cov -q` | External identity, source-tree HEAD, complete newer evidence, hashes/anchors, and byte-derived equivalence tests pass. | ✅ green |
+| 02-06-task-1 | 02-06 | 5 | TOOL-02, TOOL-03, TOOL-04, TERM-02, TERM-03, TERM-04, TERM-05 | `uv run --no-sync pytest tests/test_phase2_provenance.py --no-cov -q` | Production duplicate rules, exact evidence roles, closed diagnostics, parser totality, and temporary-resource tests pass. | ✅ green |
 
 ---
 
-## Wave 0 Requirements
+## Requirement Coverage
 
-- [ ] Add immutable running/completed and terminal evidence fixtures under `tests/fixtures/hermes/v2026.7.7.2/chat_completions/` with SHA-256 provenance entries distinguishing tag-source-derived from design-derived cases.
-- [ ] Add `scripts/check_phase2_provenance.py` and use it for canonical peel, exact `latest-tag-verification-blocked`, conditional newer-tag ownership/difference evidence, per-row D-01 through D-04 citations, and per-path hashes.
-- [ ] Add the deterministic raw duplicate-member bytes/text helper in `tests/helpers/hermes.py` because Python dictionaries cannot represent duplicate JSON members.
-- [ ] Extend `tests/test_protocol.py` and `tests/test_package.py` for direct-construction, exact-bound, enum, and export cases.
-- [ ] Extend `tests/test_sse.py` for the exhaustive tool/terminal matrix, secrecy canaries, repetition, interruption, and ordering cases.
-- [ ] Extend `tests/test_transport.py` only where the outer response-cleanup gate requires coverage.
-- No framework installation or test configuration change is required.
+| Requirement | Primary Automated Evidence | Classification |
+|-------------|----------------------------|----------------|
+| TOOL-01 | `test_protocol.py` direct enum/model strictness and `test_package.py` exact exports | COVERED |
+| TOOL-02 | `test_sse.py` correlation/order/repetition/interruption plus release-bound provenance tests | COVERED |
+| TOOL-03 | Raw approved-member duplicate matrices in `test_sse.py` and production-faithful duplicate-family provenance tests | COVERED |
+| TOOL-04 | Raw/additive payload scrub assertions, traceback/generator canaries, and closed provenance diagnostics | COVERED |
+| TERM-01 | Direct immutable/default/strict metadata tests and package-root enum export tests | COVERED |
+| TERM-02 | Exhaustive stop rows and canonical terminal fixture execution | COVERED |
+| TERM-03 | Exhaustive length rows, output-truncated mapping, and canonical fixture execution | COVERED |
+| TERM-04 | Exhaustive error rows, exact partial handling, bounded unknown-code mapping, and byte-derived equivalence | COVERED |
+| TERM-05 | Duplicate/null/contradiction matrices, design evidence execution, and exact lifecycle evidence-role checks | COVERED |
+| TERM-06 | Raw terminal secrecy, transport/disconnect taxonomy, cancellation identity, and retained-state checks | COVERED |
+| TERM-07 | Suffix/source/response cleanup ordering, early close, failure precedence, and delayed terminal delivery | COVERED |
+
+**Coverage result:** 11/11 Phase 2 requirements are covered by automated tests. No partial or missing requirement was found, so no new test file or Nyquist auditor was required.
+
+---
+
+## Wave 0 Completion
+
+- [x] Immutable correlated tool and terminal fixtures exist with exact provenance, SHA-256, source/design roles, and semantic assertions.
+- [x] `scripts/check_phase2_provenance.py` enforces tag identity, conditional newer-tag compatibility, hashes, source anchors, evidence roles, and closed failures.
+- [x] `tests/helpers/hermes.py` provides raw ordered JSON-member SSE construction for duplicate-name cases.
+- [x] `tests/test_protocol.py` and `tests/test_package.py` cover direct construction, exact bounds/types, immutability, and exports.
+- [x] `tests/test_sse.py` covers the exhaustive tool/terminal matrices, ordering, repetition, interruption, secrecy, and parser boundaries.
+- [x] `tests/test_transport.py` covers response ownership, cancellation, cleanup precedence, and delayed terminal observation.
+- [x] `tests/test_phase2_provenance.py` covers release identity, immutable evidence, duplicate/role integrity, exception totality, and cleanup.
+- [x] No framework installation or test-configuration change was required.
+
+---
+
+## Current Audit Evidence
+
+| Gate | Result |
+|------|--------|
+| Combined Phase 2 test files with `--no-cov` | Green; all plan-owned test modules pass. |
+| Full suite | 635 passed with 100% statement and branch coverage. |
+| Live provenance | `release-and-tool` and `terminal` scopes both emitted success markers. |
+| Lock and static analysis | Lock check, Ruff, basedpyright, and verifytypes pass; type completeness is 100%. |
+| Distribution hooks | Build and standalone wheel/sdist verification pass in the repository commit gate. |
+| Security and goal verification | `02-SECURITY.md` has 18/18 threats closed; `02-VERIFICATION.md` passes 22/22 must-haves. |
 
 ---
 
 ## Manual-Only Verifications
 
-All normal Phase 2 behaviors have automated verification. The implementation must repeat the latest Hermes numeric-tag check before coding. Network failure records `latest-tag-verification-blocked`; an incompatible or ambiguous newer tagged envelope stops at a blocking human contract-decision checkpoint rather than becoming a guessed mapping.
+None. All Phase 2 requirements have automated verification. A future incompatible or ambiguous Hermes tag remains a blocking contract-decision checkpoint rather than a current manual-only validation gap.
+
+---
+
+## Validation Audit 2026-07-17
+
+| Metric | Count |
+|--------|-------|
+| Requirements audited | 11 |
+| Executed tasks audited | 7 |
+| Gaps found | 0 |
+| Resolved by new tests | 0 |
+| Escalated/manual-only | 0 |
 
 ---
 
 ## Validation Sign-Off
 
-- [x] All planned requirement areas have automated verification commands.
-- [x] Sampling continuity prevents three consecutive tasks without an automated check.
-- [x] Wave 0 names every missing fixture/test extension.
+- [x] All executed tasks have current automated verification commands.
+- [x] All 11 Phase 2 requirements have green automated evidence.
+- [x] Wave 0 fixtures, helpers, tests, and provenance gates exist and pass.
 - [x] No watch-mode flags are used.
-- [x] Measured feedback latency is under 10 seconds.
+- [x] `wave_0_complete: true` is set in frontmatter.
 - [x] `nyquist_compliant: true` is set in frontmatter.
+- [x] `status: verified` is set in frontmatter.
 
-**Approval:** approved for planning 2026-07-17
+**Approval:** verified 2026-07-17
