@@ -9,10 +9,11 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Never, Protocol, cast
 
 import pytest
 
@@ -41,6 +42,7 @@ _KINDS = {
     ),
     "chat_completions/terminal_design_matrix.json": "design-derived",
 }
+_LATEST_BLOCKED_EXIT_STATUS = 3
 
 
 class _Cleanup(Protocol):
@@ -57,6 +59,10 @@ class _ProvenanceModule(Protocol):
     _CANONICAL_TAG_OBJECT: str
     ProvenanceError: type[RuntimeError]
 
+    def _run_git(self, *arguments: str, cwd: Path | None = None) -> str: ...
+
+    def _version_key(self, tag: str) -> tuple[int, ...]: ...
+
     def _load_object(self, path: Path) -> dict[str, object]: ...
 
     def _json_pairs(self, data: str) -> object: ...
@@ -69,6 +75,14 @@ class _ProvenanceModule(Protocol):
         *,
         expected_release: str,
         expected_commit: str,
+    ) -> None: ...
+
+    def _verify_legacy_source_ref(
+        self,
+        upstream_url: object,
+        source_root: Path,
+        release: str,
+        commit: str,
     ) -> None: ...
 
     def _verify_newer_release(
@@ -88,6 +102,12 @@ class _ProvenanceModule(Protocol):
 
     def _verify_design_matrix(self, path: Path) -> tuple[object, ...]: ...
 
+    def _contains_none(self, value: object) -> bool: ...
+
+    def _fetch_source_tree(self, commit: str) -> tuple[Path, _Cleanup]: ...
+
+    def _verify_scope(self, scope: str) -> None: ...
+
     def _source_lines(
         self, source_root: Path, path: str, start: int, end: int
     ) -> bytes: ...
@@ -105,11 +125,20 @@ class _ReleaseEvidence:
 
 
 class _CleanupProbe:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        failure: BaseException | None = None,
+        name: str | None = None,
+    ) -> None:
         self.called = False
+        self.failure = failure
+        self.name = name
 
     def cleanup(self) -> None:
         self.called = True
+        if self.failure is not None:
+            raise self.failure
 
 
 @pytest.fixture
@@ -1150,3 +1179,402 @@ def test_nul_fixture_path_is_closed_direct_and_cli(
     _assert_closed_cli_failure(
         capsys.readouterr(), "invalid-fixture-path", "fixture-secret-canary"
     )
+
+
+def _oversized_numeric_tag() -> str:
+    return "v" + "9" * 5_000 + ".1"
+
+
+def _install_oversized_legacy_range(
+    evidence: _ReleaseEvidence,
+    provenance: _ProvenanceModule,
+) -> dict[str, object]:
+    entry = _manifest_entries(evidence)[0]
+    entry.pop("source_refs")
+    digits = "9" * 5_000
+    entry["upstream_url"] = (
+        f"{provenance._REPOSITORY}/blob/{evidence.release}/"
+        f"gateway/platforms/api_server.py#L{digits}-L{digits}"
+    )
+    _rewrite(evidence)
+    return entry
+
+
+def test_oversized_numeric_tag_is_a_closed_error(
+    provenance: _ProvenanceModule,
+) -> None:
+    """Reject an integer-limit release component with a finite tag code."""
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._version_key(_oversized_numeric_tag())
+
+    assert caught.value.args == ("invalid-numeric-release-tag",)
+    _assert_closed_error(caught.value, "9" * 64, "ValueError")
+
+
+def test_main_closes_oversized_numeric_tag(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Keep release selection total over regex-valid oversized components."""
+    tag = _oversized_numeric_tag()
+    monkeypatch.setattr(
+        provenance,
+        "_release_tags",
+        lambda: ({tag: "a" * 40}, {tag: "b" * 40}),
+    )
+
+    assert provenance.main(["--scope", "terminal"]) == 1
+    _assert_closed_cli_failure(
+        capsys.readouterr(), "invalid-numeric-release-tag", "9" * 64
+    )
+
+
+def test_oversized_legacy_source_range_is_a_closed_error(
+    provenance: _ProvenanceModule,
+    tmp_path: Path,
+) -> None:
+    """Reject integer-limit legacy line anchors before source slicing."""
+    evidence = _release_evidence(
+        provenance,
+        tmp_path,
+        release="v9999.8",
+        name="oversized-legacy-direct",
+        canonical_scope=True,
+    )
+    entry = _install_oversized_legacy_range(evidence, provenance)
+
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._verify_fixture_entry(
+            entry,
+            evidence.version_root,
+            evidence.source_root,
+            expected_release=evidence.release,
+            expected_commit=evidence.commit,
+        )
+
+    assert caught.value.args == ("invalid-source-line-anchor",)
+    _assert_closed_error(caught.value, "9" * 64, "ValueError")
+
+
+def test_main_closes_oversized_legacy_source_range(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Emit one finite line-anchor code for a legacy manifest URL."""
+    evidence = _canonical_cli_evidence(
+        provenance,
+        monkeypatch,
+        tmp_path,
+        release="v9999.9",
+        name="oversized-legacy-cli",
+    )
+    _install_oversized_legacy_range(evidence, provenance)
+
+    assert provenance.main(["--scope", "release-and-tool"]) == 1
+    _assert_closed_cli_failure(
+        capsys.readouterr(), "invalid-source-line-anchor", "9" * 64
+    )
+
+
+def _deep_matrix_payload(*, with_null: bool) -> tuple[bytes, str]:
+    payload = (
+        _CANONICAL_FIXTURES / "chat_completions/terminal_design_matrix.json"
+    ).read_text(encoding="utf-8")
+    leaf = "null" if with_null else '"deep-matrix-secret-canary"'
+    metadata = "[" * 500 + leaf + "]" * 500
+    original_wire = '"wire": {\n        "finish_reason": "stop"\n      }'
+    replacement_wire = (
+        '"wire": {"finish_reason": "stop", "hermes": {"metadata": ' + metadata + "}}"
+    )
+    payload = payload.replace(original_wire, replacement_wire, 1)
+    if with_null:
+        code = "missing-null-citation"
+    else:
+        payload = payload.replace(
+            '"disposition": "accept"',
+            '"disposition": "deep-matrix-secret-canary"',
+            1,
+        )
+        code = "invalid-terminal-disposition"
+    return (payload.encode(), code)
+
+
+@pytest.mark.parametrize("with_null", [False, True], ids=["without-null", "with-null"])
+def test_deep_matrix_metadata_walk_is_iterative(
+    provenance: _ProvenanceModule,
+    *,
+    with_null: bool,
+) -> None:
+    """Walk parser-valid nested lists without consuming Python call frames."""
+    value: object = None if with_null else "deep-matrix-secret-canary"
+    for _ in range(500):
+        value = [value]
+
+    assert provenance._contains_none(value) is with_null
+
+
+@pytest.mark.parametrize("with_null", [False, True], ids=["without-null", "with-null"])
+def test_deep_matrix_metadata_is_a_closed_direct_error(
+    provenance: _ProvenanceModule,
+    tmp_path: Path,
+    *,
+    with_null: bool,
+) -> None:
+    """Reach the intended finite matrix validation after a deep metadata walk."""
+    payload, code = _deep_matrix_payload(with_null=with_null)
+    path = tmp_path / "deep-metadata-matrix.json"
+    path.write_bytes(payload)
+
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._verify_design_matrix(path)
+
+    assert caught.value.args == (code,)
+    _assert_closed_error(caught.value, "deep-matrix-secret-canary", "RecursionError")
+
+
+@pytest.mark.parametrize("with_null", [False, True], ids=["without-null", "with-null"])
+def test_main_closes_deep_matrix_metadata(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    with_null: bool,
+) -> None:
+    """Keep parser-valid deep metadata closed through the executable verifier."""
+    payload, code = _deep_matrix_payload(with_null=with_null)
+    evidence = _canonical_cli_evidence(
+        provenance,
+        monkeypatch,
+        tmp_path,
+        release="v9999.10",
+        name=f"deep-matrix-{with_null}",
+    )
+    relative = "chat_completions/terminal_design_matrix.json"
+    path = evidence.version_root / relative
+    path.write_bytes(payload)
+    entry = next(
+        item for item in _manifest_entries(evidence) if item["path"] == relative
+    )
+    entry["sha256"] = hashlib.sha256(payload).hexdigest()
+    _rewrite(evidence)
+
+    assert provenance.main(["--scope", "terminal"]) == 1
+    _assert_closed_cli_failure(
+        capsys.readouterr(), code, "deep-matrix-secret-canary", "RecursionError"
+    )
+
+
+def _raise_unicode_git(*_args: object, **_kwargs: object) -> Never:
+    encoding = "utf-8"
+    raise UnicodeDecodeError(
+        encoding,
+        b"git-output-secret-canary",
+        0,
+        1,
+        "invalid byte",
+    )
+
+
+def test_git_decode_failure_is_a_closed_error(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Translate undecodable subprocess output outside the active handler."""
+    monkeypatch.setattr(subprocess, "run", _raise_unicode_git)
+
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._run_git("status")
+
+    assert caught.value.args == ("latest-tag-verification-blocked",)
+    _assert_closed_error(caught.value, "git-output-secret-canary", "UnicodeDecodeError")
+
+
+def test_main_closes_git_decode_failure(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Emit exit 3 without retaining undecodable Git bytes."""
+    monkeypatch.setattr(subprocess, "run", _raise_unicode_git)
+
+    assert provenance.main(["--scope", "terminal"]) == _LATEST_BLOCKED_EXIT_STATUS
+    _assert_closed_cli_failure(
+        capsys.readouterr(),
+        "latest-tag-verification-blocked",
+        "git-output-secret-canary",
+    )
+
+
+def _raise_temporary_creation(*_args: object, **_kwargs: object) -> Never:
+    message = "temporary-creation-secret-canary"
+    raise OSError(message)
+
+
+def _install_canonical_tag_result(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        provenance,
+        "_release_tags",
+        lambda: (
+            {provenance._CANONICAL_TAG: provenance._CANONICAL_TAG_OBJECT},
+            {provenance._CANONICAL_TAG: provenance._CANONICAL_COMMIT},
+        ),
+    )
+
+
+def test_temporary_creation_failure_is_a_closed_error(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Translate source-tree temporary directory creation failure."""
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", _raise_temporary_creation)
+
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._fetch_source_tree(provenance._CANONICAL_COMMIT)
+
+    assert caught.value.args == ("latest-tag-verification-blocked",)
+    _assert_closed_error(caught.value, "temporary-creation-secret-canary", "OSError")
+
+
+def test_main_closes_temporary_creation_failure(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Emit exit 3 when temporary source-tree setup is unavailable."""
+    _install_canonical_tag_result(provenance, monkeypatch)
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", _raise_temporary_creation)
+
+    assert provenance.main(["--scope", "terminal"]) == _LATEST_BLOCKED_EXIT_STATUS
+    _assert_closed_cli_failure(
+        capsys.readouterr(),
+        "latest-tag-verification-blocked",
+        "temporary-creation-secret-canary",
+    )
+
+
+def test_fetch_failure_cleans_its_temporary_tree(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A source fetch validation failure still releases its temporary tree."""
+    root = tmp_path / "fetch-failure-root"
+    root.mkdir()
+    probe = _CleanupProbe(name=str(root))
+
+    def create_temporary(*_args: object, **_kwargs: object) -> _CleanupProbe:
+        return probe
+
+    def fail_git(*_args: object, **_kwargs: object) -> Never:
+        code = "latest-tag-verification-blocked"
+        raise provenance.ProvenanceError(code) from None
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", create_temporary)
+    monkeypatch.setattr(provenance, "_run_git", fail_git)
+
+    with pytest.raises(
+        provenance.ProvenanceError, match=r"^latest-tag-verification-blocked$"
+    ):
+        provenance._fetch_source_tree(provenance._CANONICAL_COMMIT)
+
+    assert probe.called is True
+
+
+def _install_failing_cleanup_fetcher(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    evidence: _ReleaseEvidence,
+) -> list[_CleanupProbe]:
+    probes: list[_CleanupProbe] = []
+
+    def fetch(_commit: str) -> tuple[Path, _Cleanup]:
+        probe = _CleanupProbe(failure=OSError("temporary-cleanup-secret-canary"))
+        probes.append(probe)
+        return evidence.source_root, probe
+
+    monkeypatch.setattr(provenance, "_fetch_source_tree", fetch)
+    return probes
+
+
+@pytest.mark.parametrize(
+    ("validation_fails", "code"),
+    [
+        (False, "latest-tag-verification-blocked"),
+        (True, "provenance-schema-version"),
+    ],
+    ids=["cleanup-alone", "validation-precedes-cleanup"],
+)
+def test_cleanup_failure_is_closed_with_validation_precedence(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    validation_fails: bool,
+    code: str,
+) -> None:
+    """Close cleanup failure without replacing a selected validation code."""
+    evidence = _canonical_cli_evidence(
+        provenance,
+        monkeypatch,
+        tmp_path,
+        release="v9999.11",
+        name=f"cleanup-direct-{validation_fails}",
+    )
+    if validation_fails:
+        evidence.manifest["schema_version"] = 999
+    _rewrite(evidence)
+    probes = _install_failing_cleanup_fetcher(provenance, monkeypatch, evidence)
+
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._verify_scope("release-and-tool")
+
+    assert caught.value.args == (code,)
+    _assert_closed_error(caught.value, "temporary-cleanup-secret-canary", "OSError")
+    assert probes
+    assert all(probe.called for probe in probes)
+
+
+@pytest.mark.parametrize(
+    ("validation_fails", "code", "exit_status"),
+    [
+        (False, "latest-tag-verification-blocked", 3),
+        (True, "provenance-schema-version", 1),
+    ],
+    ids=["cleanup-alone", "validation-precedes-cleanup"],
+)
+def test_main_closes_cleanup_with_validation_precedence(  # noqa: PLR0913
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    validation_fails: bool,
+    code: str,
+    exit_status: int,
+) -> None:
+    """Preserve finite exit taxonomy when validation and cleanup both fail."""
+    evidence = _canonical_cli_evidence(
+        provenance,
+        monkeypatch,
+        tmp_path,
+        release="v9999.12",
+        name=f"cleanup-cli-{validation_fails}",
+    )
+    if validation_fails:
+        evidence.manifest["schema_version"] = 999
+    _rewrite(evidence)
+    probes = _install_failing_cleanup_fetcher(provenance, monkeypatch, evidence)
+
+    assert provenance.main(["--scope", "release-and-tool"]) == exit_status
+    _assert_closed_cli_failure(
+        capsys.readouterr(), code, "temporary-cleanup-secret-canary", "OSError"
+    )
+    assert probes
+    assert all(probe.called for probe in probes)
