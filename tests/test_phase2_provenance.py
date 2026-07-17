@@ -52,9 +52,12 @@ class _ProvenanceModule(Protocol):
     _PROVENANCE_PATH: Path
     _CANONICAL_TAG: str
     _CANONICAL_COMMIT: str
+    _CANONICAL_TAG_OBJECT: str
     ProvenanceError: type[RuntimeError]
 
     def _load_object(self, path: Path) -> dict[str, object]: ...
+
+    def _json_pairs(self, data: str) -> object: ...
 
     def _verify_fixture_entry(
         self,
@@ -764,3 +767,137 @@ def test_main_prints_one_closed_code_for_real_canary_failure(
     assert captured.err == "missing-fixture\n"
     assert "cli-secret-canary" not in captured.err
     assert "forged-line" not in captured.err
+
+
+def _deep_json(*, object_root: bool) -> str:
+    depth = 20_000
+    if object_root:
+        return '{"recursive-secret-canary":' * depth + "0" + "}" * depth
+    return "[" * depth + '"recursive-secret-canary"' + "]" * depth
+
+
+def _install_canonical_cli_identity(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    evidence: _ReleaseEvidence,
+) -> None:
+    tag_object = "a" * 40
+    monkeypatch.setattr(provenance, "_CANONICAL_TAG_OBJECT", tag_object)
+    monkeypatch.setattr(
+        provenance,
+        "_release_tags",
+        lambda: ({evidence.release: tag_object}, {evidence.release: evidence.commit}),
+    )
+    evidence.manifest["release_verification"] = {
+        "canonical_tag": evidence.release,
+        "canonical_tag_object": tag_object,
+        "canonical_peeled_commit": evidence.commit,
+        "observed_latest_numeric_tag": evidence.release,
+        "observed_latest_peeled_commit": evidence.commit,
+        "compatibility_disposition": "canonical-current",
+    }
+
+
+def test_recursive_lifecycle_json_is_a_closed_provenance_error(
+    provenance: _ProvenanceModule,
+) -> None:
+    """Translate decoder recursion at the lifecycle pair boundary."""
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._json_pairs(_deep_json(object_root=False))
+
+    assert caught.value.args == ("invalid-sse-json",)
+    _assert_closed_error(
+        caught.value,
+        "recursive-secret-canary",
+        "RecursionError",
+    )
+
+
+def test_recursive_object_file_is_a_closed_provenance_error(
+    provenance: _ProvenanceModule,
+    tmp_path: Path,
+) -> None:
+    """Translate decoder recursion at the provenance/design object boundary."""
+    path = tmp_path / "deep-object.json"
+    path.write_text(_deep_json(object_root=True), encoding="utf-8")
+
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._load_object(path)
+
+    assert caught.value.args == ("invalid-provenance-json",)
+    _assert_closed_error(
+        caught.value,
+        "recursive-secret-canary",
+        "RecursionError",
+    )
+
+
+def test_main_closes_recursive_lifecycle_json_failure(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Emit one closed line when canonical lifecycle JSON exceeds recursion."""
+    evidence = _release_evidence(
+        provenance,
+        tmp_path,
+        release="v9999.2",
+        name="recursive-lifecycle-cli",
+        canonical_scope=True,
+    )
+    _install_release_roots(provenance, monkeypatch, tmp_path / "fixtures", evidence)
+    _install_fetcher(provenance, monkeypatch, (evidence,))
+    _install_canonical_cli_identity(provenance, monkeypatch, evidence)
+    tool_path = evidence.version_root / _LIFECYCLE_PATHS[0]
+    payload = tool_path.read_text(encoding="utf-8")
+    payload = payload.replace(
+        'data: {"tool": "terminal"',
+        "data: " + _deep_json(object_root=False),
+        1,
+    )
+    tool_path.write_text(payload, encoding="utf-8")
+    entry = next(
+        item
+        for item in _manifest_entries(evidence)
+        if item["path"] == _LIFECYCLE_PATHS[0]
+    )
+    entry["sha256"] = hashlib.sha256(tool_path.read_bytes()).hexdigest()
+    _rewrite(evidence)
+
+    assert provenance.main(["--scope", "release-and-tool"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "invalid-sse-json\n"
+    assert "recursive-secret-canary" not in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_main_closes_recursive_object_file_failure(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Emit one closed line when the provenance object exceeds recursion."""
+    evidence = _release_evidence(
+        provenance,
+        tmp_path,
+        release="v9999.3",
+        name="recursive-object-cli",
+        canonical_scope=True,
+    )
+    _install_release_roots(provenance, monkeypatch, tmp_path / "fixtures", evidence)
+    _install_fetcher(provenance, monkeypatch, (evidence,))
+    _install_canonical_cli_identity(provenance, monkeypatch, evidence)
+    (evidence.version_root / "provenance.json").write_text(
+        _deep_json(object_root=True),
+        encoding="utf-8",
+    )
+
+    assert provenance.main(["--scope", "terminal"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "invalid-provenance-json\n"
+    assert "recursive-secret-canary" not in captured.err
+    assert "Traceback" not in captured.err
