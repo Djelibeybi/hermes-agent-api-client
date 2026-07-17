@@ -1338,6 +1338,45 @@ async def test_streaming_failures_close_response(
 
 
 @pytest.mark.asyncio
+async def test_streaming_oversized_json_integer_is_a_protocol_failure() -> None:
+    """A decoder integer limit remains protocol data and closes its response."""
+    canary = "stream-oversized-integer-canary"
+    payload = (
+        b'data: {"choices":[],"' + canary.encode() + b'":' + b"9" * 5_000 + b"}\n\n"
+    )
+    stream = TrackingAsyncByteStream((payload,))
+    response: httpx.Response | None = None
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal response
+        response = httpx.Response(200, request=request, stream=stream)
+        return response
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        with pytest.raises(HermesProtocolError) as caught:
+            await _collect_stream(client)
+
+        assert type(caught.value) is HermesProtocolError
+        assert not isinstance(caught.value, HermesTransportError)
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        assert canary not in str(caught.value)
+        assert canary not in repr(caught.value)
+        assert stream.closed is True
+        assert response is not None
+        assert response.is_closed is True
+        assert client.is_closed is False
+        _assert_traceback_locals_are_safe(
+            caught.value,
+            canaries=(canary,),
+            forbidden_objects=(payload, stream, response),
+        )
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_stream_cancellation_is_unchanged_after_response_cleanup() -> None:
     """Cancellation identity propagates unchanged after response cleanup."""
     cancellation = asyncio.CancelledError("cancellation-canary")

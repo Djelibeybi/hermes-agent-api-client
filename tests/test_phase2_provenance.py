@@ -19,6 +19,8 @@ import pytest
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from _pytest.capture import CaptureResult
+
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = _ROOT / "scripts" / "check_phase2_provenance.py"
@@ -81,6 +83,8 @@ class _ProvenanceModule(Protocol):
         entries: Mapping[str, Mapping[str, object]],
         version_root: Path,
     ) -> tuple[object, ...]: ...
+
+    def _safe_fixture_path(self, version_root: Path, relative: str) -> Path: ...
 
     def _verify_design_matrix(self, path: Path) -> tuple[object, ...]: ...
 
@@ -776,6 +780,10 @@ def _deep_json(*, object_root: bool) -> str:
     return "[" * depth + '"recursive-secret-canary"' + "]" * depth
 
 
+def _oversized_integer_json() -> str:
+    return '{"oversized-secret-canary":' + "9" * 5_000 + "}"
+
+
 def _install_canonical_cli_identity(
     provenance: _ProvenanceModule,
     monkeypatch: pytest.MonkeyPatch,
@@ -796,6 +804,37 @@ def _install_canonical_cli_identity(
         "observed_latest_peeled_commit": evidence.commit,
         "compatibility_disposition": "canonical-current",
     }
+
+
+def _canonical_cli_evidence(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    release: str,
+    name: str,
+) -> _ReleaseEvidence:
+    evidence = _release_evidence(
+        provenance,
+        tmp_path,
+        release=release,
+        name=name,
+        canonical_scope=True,
+    )
+    _install_release_roots(provenance, monkeypatch, tmp_path / "fixtures", evidence)
+    _install_fetcher(provenance, monkeypatch, (evidence,))
+    _install_canonical_cli_identity(provenance, monkeypatch, evidence)
+    return evidence
+
+
+def _assert_closed_cli_failure(
+    captured: CaptureResult[str], code: str, *canaries: str
+) -> None:
+    assert captured.out == ""
+    assert captured.err == f"{code}\n"
+    assert "Traceback" not in captured.err
+    for canary in canaries:
+        assert canary not in captured.err
 
 
 def test_recursive_lifecycle_json_is_a_closed_provenance_error(
@@ -901,3 +940,213 @@ def test_main_closes_recursive_object_file_failure(
     assert captured.err == "invalid-provenance-json\n"
     assert "recursive-secret-canary" not in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_oversized_lifecycle_integer_is_a_closed_provenance_error(
+    provenance: _ProvenanceModule,
+) -> None:
+    """Translate Python's integer conversion limit at the SSE JSON boundary."""
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._json_pairs(_oversized_integer_json())
+
+    assert caught.value.args == ("invalid-sse-json",)
+    _assert_closed_error(caught.value, "oversized-secret-canary", "ValueError")
+
+
+@pytest.mark.parametrize("boundary", ["object", "design-matrix"])
+def test_oversized_object_integer_is_a_closed_provenance_error(
+    provenance: _ProvenanceModule,
+    tmp_path: Path,
+    boundary: str,
+) -> None:
+    """Translate Python's integer limit at each object-file consumer."""
+    path = tmp_path / f"{boundary}.json"
+    path.write_text(_oversized_integer_json(), encoding="utf-8")
+    verify = (
+        provenance._load_object
+        if boundary == "object"
+        else provenance._verify_design_matrix
+    )
+
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        verify(path)
+
+    assert caught.value.args == ("invalid-provenance-json",)
+    _assert_closed_error(caught.value, "oversized-secret-canary", "ValueError")
+
+
+def test_main_closes_oversized_lifecycle_integer(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Emit one finite SSE code for a lifecycle integer conversion failure."""
+    evidence = _canonical_cli_evidence(
+        provenance,
+        monkeypatch,
+        tmp_path,
+        release="v9999.4",
+        name="oversized-lifecycle-cli",
+    )
+    relative = _LIFECYCLE_PATHS[0]
+    path = evidence.version_root / relative
+    payload = path.read_text(encoding="utf-8")
+    first_data = next(
+        line for line in payload.splitlines() if line.startswith("data: ")
+    )
+    replacement = "data: " + _oversized_integer_json()
+    path.write_text(payload.replace(first_data, replacement, 1), encoding="utf-8")
+    entry = next(
+        item for item in _manifest_entries(evidence) if item["path"] == relative
+    )
+    entry["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _rewrite(evidence)
+
+    assert provenance.main(["--scope", "release-and-tool"]) == 1
+    _assert_closed_cli_failure(
+        capsys.readouterr(), "invalid-sse-json", "oversized-secret-canary"
+    )
+
+
+@pytest.mark.parametrize("boundary", ["provenance", "design-matrix"])
+def test_main_closes_oversized_object_integer(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    boundary: str,
+) -> None:
+    """Emit one finite object code for provenance and matrix JSON limits."""
+    evidence = _canonical_cli_evidence(
+        provenance,
+        monkeypatch,
+        tmp_path,
+        release="v9999.5",
+        name=f"oversized-{boundary}-cli",
+    )
+    if boundary == "provenance":
+        path = evidence.version_root / "provenance.json"
+    else:
+        relative = "chat_completions/terminal_design_matrix.json"
+        path = evidence.version_root / relative
+        entry = next(
+            item for item in _manifest_entries(evidence) if item["path"] == relative
+        )
+        entry["sha256"] = hashlib.sha256(_oversized_integer_json().encode()).hexdigest()
+        _rewrite(evidence)
+    path.write_text(_oversized_integer_json(), encoding="utf-8")
+
+    assert provenance.main(["--scope", "terminal"]) == 1
+    _assert_closed_cli_failure(
+        capsys.readouterr(), "invalid-provenance-json", "oversized-secret-canary"
+    )
+
+
+def _malformed_matrix(location: str, invalid: object) -> dict[str, object]:
+    matrix = cast(
+        "dict[str, object]",
+        json.loads(
+            (
+                _CANONICAL_FIXTURES / "chat_completions/terminal_design_matrix.json"
+            ).read_text(encoding="utf-8")
+        ),
+    )
+    cases = matrix["cases"]
+    assert isinstance(cases, list)
+    first_case = cast("object", cases[0])
+    assert isinstance(first_case, dict)
+    case = cast("dict[str, object]", first_case)
+    if location == "root-refs":
+        matrix["decision_refs"] = [invalid]
+    elif location == "case-refs":
+        case["decision_refs"] = [invalid]
+    else:
+        wire = case["wire"]
+        assert isinstance(wire, dict)
+        wire["finish_reason"] = invalid
+    return matrix
+
+
+@pytest.mark.parametrize("invalid", [[], {}], ids=["list", "dict"])
+@pytest.mark.parametrize(
+    ("location", "code"),
+    [
+        ("root-refs", "terminal-matrix-decision-set"),
+        ("case-refs", "invalid-terminal-case-citations"),
+        ("finish-reason", "missing-applicable-terminal-citation"),
+    ],
+)
+def test_malformed_matrix_scalars_are_closed_direct_and_cli(  # noqa: PLR0913
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    location: str,
+    code: str,
+    invalid: object,
+) -> None:
+    """Reject unhashable matrix values with finite direct and CLI codes."""
+    matrix = _malformed_matrix(location, invalid)
+    payload = (json.dumps(matrix) + "\n").encode()
+    direct_path = tmp_path / "direct-matrix.json"
+    direct_path.write_bytes(payload)
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._verify_design_matrix(direct_path)
+    assert caught.value.args == (code,)
+    _assert_closed_error(caught.value, "TypeError")
+
+    evidence = _canonical_cli_evidence(
+        provenance,
+        monkeypatch,
+        tmp_path,
+        release="v9999.6",
+        name=f"matrix-{location}",
+    )
+    relative = "chat_completions/terminal_design_matrix.json"
+    matrix_path = evidence.version_root / relative
+    matrix_path.write_bytes(payload)
+    entry = next(
+        item for item in _manifest_entries(evidence) if item["path"] == relative
+    )
+    entry["sha256"] = hashlib.sha256(payload).hexdigest()
+    _rewrite(evidence)
+
+    assert provenance.main(["--scope", "terminal"]) == 1
+    _assert_closed_cli_failure(capsys.readouterr(), code, "TypeError")
+
+
+def test_nul_fixture_path_is_closed_direct_and_cli(
+    provenance: _ProvenanceModule,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject an invalid manifest path without retaining it or its exception."""
+    evidence = _canonical_cli_evidence(
+        provenance,
+        monkeypatch,
+        tmp_path,
+        release="v9999.7",
+        name="nul-fixture-path",
+    )
+    entry = _manifest_entries(evidence)[0]
+    canary = "fixture-secret-canary\0.sse"
+    entry["path"] = canary
+    _rewrite(evidence)
+
+    with pytest.raises(provenance.ProvenanceError) as caught:
+        provenance._verify_fixture_entry(
+            entry,
+            evidence.version_root,
+            evidence.source_root,
+            expected_release=evidence.release,
+            expected_commit=evidence.commit,
+        )
+    assert caught.value.args == ("invalid-fixture-path",)
+    _assert_closed_error(caught.value, "fixture-secret-canary", "ValueError")
+
+    assert provenance.main(["--scope", "release-and-tool"]) == 1
+    _assert_closed_cli_failure(
+        capsys.readouterr(), "invalid-fixture-path", "fixture-secret-canary"
+    )

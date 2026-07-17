@@ -1646,6 +1646,30 @@ async def test_direct_sse_failures_scrub_raw_payloads_from_traceback_frames(
 
 
 @pytest.mark.asyncio
+async def test_oversized_json_integer_is_a_closed_protocol_failure() -> None:
+    """A decoder ValueError is malformed wire data, never retryable transport."""
+    canary = "direct-oversized-integer-canary"
+    payload = (
+        b'data: {"choices":[],"' + canary.encode() + b'":' + b"9" * 5_000 + b"}\n\n"
+    )
+    source = _ClosableChunks((payload,))
+
+    with pytest.raises(HermesProtocolError) as caught:
+        tuple([event async for event in async_decode_hermes_sse(source)])
+
+    assert type(caught.value) is HermesProtocolError
+    assert not isinstance(caught.value, HermesTransportError)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert source.closed is True
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=(canary,),
+        forbidden_objects=(payload, source),
+    )
+
+
+@pytest.mark.asyncio
 async def test_iterator_acquisition_error_becomes_scrubbed_transport_failure() -> None:
     """An iterable's `__aiter__` error cannot escape as a raw public failure."""
     canary = "direct-sse-aiter-raw-canary"
