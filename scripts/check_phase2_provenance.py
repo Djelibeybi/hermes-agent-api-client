@@ -103,7 +103,7 @@ def _load_object(path: Path) -> dict[str, Any]:
     failed = False
     try:
         value = json.loads(path.read_bytes())
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
         failed = True
         value = None
     if failed:
@@ -503,7 +503,7 @@ def _json_pairs(data: str) -> object:
     failed = False
     try:
         value = json.loads(data, object_pairs_hook=_json_object_pairs_hook)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         failed = True
         value = None
     if failed:
