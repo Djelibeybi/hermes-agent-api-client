@@ -1,6 +1,6 @@
 ---
 phase: 02-conversation-event-contract
-reviewed: 2026-07-17T01:45:26Z
+reviewed: 2026-07-17T02:09:13Z
 depth: deep
 files_reviewed: 17
 files_reviewed_list:
@@ -22,111 +22,53 @@ files_reviewed_list:
   - tests/test_sse.py
   - tests/test_transport.py
 findings:
-  critical: 4
+  critical: 0
   warning: 0
   info: 0
-  total: 4
-status: issues_found
+  total: 0
+status: clean
 ---
 
 # Phase 2: Code Review Report
 
-**Reviewed:** 2026-07-17T01:45:26Z
+**Reviewed:** 2026-07-17T02:09:13Z
 **Depth:** deep
 **Files Reviewed:** 17
-**Status:** issues_found
+**Status:** clean
 
 ## Summary
 
-The four reported malformed-input defects are fixed. Oversized JSON integers now become `HermesProtocolError` publicly and exact closed provenance codes internally; decoder-recursive JSON remains closed; matrix references and finish reasons are exact-type checked before hashing; and NUL/resolution failures become `invalid-fixture-path`. Commit `4cbeb93` records those `aeab137` fixes accurately. The exact five-test-file review scope passes all 558 tests without coverage instrumentation. Executing the pre-fix `aeab137^` implementation reproduced the intended RED outcomes (`HermesTransportError`, raw `ValueError`, raw `TypeError`, and raw path `ValueError`), while the earlier recursion implementation propagated raw `RecursionError` through both direct and `main` paths.
+The four findings from the prior deep report are closed by `865bf19`, and `9234be0` records the implemented behavior accurately. The new verifier helpers preserve finite diagnostics, validation-before-cleanup precedence, and cleanup ownership across failed fetch initialization, canonical/newer comparison, and both CLI scopes. No ordinary Python correctness regression was found in the new call chains.
 
-A systematic pass over the remaining parsing, validation, and verifier-setup operations found four ordinary-exception escapes. Oversized numeric release tags and legacy source ranges can trigger raw integer-conversion `ValueError`; recursive but parser-valid matrix metadata can trigger raw `RecursionError`; undecodable Git output can escape `_run_git` as `UnicodeDecodeError`; and temporary-directory creation can escape as raw `OSError`. Each bypasses `main`'s finite `ProvenanceError` boundary.
+All reviewed files meet quality standards. No issues found.
 
 ## Prior Finding Re-evaluation
 
-- **Large JSON integers — CLOSED.** `ValueError` is caught at the public SSE and both provenance JSON boundaries. Direct SSE, HTTP client cleanup, provenance, design-matrix, lifecycle, and CLI regressions pass with the intended protocol/code taxonomy.
-- **Recursive JSON — CLOSED at both decoders.** Lifecycle JSON maps to `invalid-sse-json`; provenance and matrix JSON map to `invalid-provenance-json`; direct exceptions have no cause/context and CLI stderr is a single closed line.
-- **Non-string design-matrix members — CLOSED for the reported members.** Root refs, case refs, and `finish_reason` are validated before set/dict operations, and list/dict variants fail with finite matrix codes.
-- **Invalid/NUL fixture paths — CLOSED.** NUL is rejected before resolution; `OSError`, `RuntimeError`, and `ValueError` from resolution are translated after leaving the handler; escapes retain their separate `fixture-path-escape` code.
-- **RED validity — CONFIRMED.** Running `aeab137^` through the same direct boundaries produced raw `ValueError` for oversized JSON and NUL paths, raw `TypeError` for malformed matrix refs, and retryable `HermesTransportError` for public SSE. The recursion pre-fix source likewise produced raw `RecursionError` from both direct boundaries and both `main` call chains.
+- **Oversized numeric tags and legacy ranges — CLOSED.** Regex-valid 5,000-digit release components now produce `invalid-numeric-release-tag`; 5,000-digit legacy line anchors produce `invalid-source-line-anchor`. Conversion occurs inside guarded blocks, and failures are classified only after leaving the active handler.
+- **Deep parser-valid matrix metadata — CLOSED.** `_contains_none` now uses an iterative exact-built-in `dict`/`list` traversal. Five-hundred-level metadata with and without null reaches the intended finite matrix result instead of consuming Python call frames.
+- **Unicode subprocess output — CLOSED.** `_run_git` classifies `UnicodeError` with `OSError` as `latest-tag-verification-blocked`; direct errors have one closed argument and the CLI emits exit 3 with one closed stderr line.
+- **Temporary-directory lifecycle — CLOSED.** Creation failure, fetch-initialization failure, cleanup-only failure, and validation-plus-cleanup failure all release ownership through the new helpers. An already-selected validation error is re-raised ahead of cleanup failure; cleanup alone maps to `latest-tag-verification-blocked`.
+
+## RED/GREEN Verification
+
+I replayed the six representative boundaries against `865bf19^`. The pre-fix implementation propagated raw `ValueError` for both oversized conversions, raw `RecursionError` for deep matrix traversal, raw `UnicodeDecodeError` for Git output, raw `OSError` for temporary creation, and cleanup `OSError` in place of an already-selected `ProvenanceError`. These are the intended RED failure modes introduced by `19cce6c`.
+
+On the current implementation, the 19 focused totality regressions pass. Their direct and `main()` assertions cover exact finite codes, exit 1 versus exit 3, absent cause/context and canaries, cleanup execution, and validation-error precedence.
 
 ## Narrative Findings (AI reviewer)
 
-## Critical Issues
+No Critical, Warning, or Info findings remain in the reviewed scope.
 
-### CR-01: Numeric tags and legacy source ranges can escape as raw integer-conversion errors
+## Regression Evidence
 
-**File:** `scripts/check_phase2_provenance.py:157-168,364-376,1020-1027`
-**Issue:** `_version_key` and `_verify_legacy_source_ref` validate only regex shape before calling `int()` on externally controlled digit strings. A numeric release tag such as `v<5000 digits>.1`, or a valid manifest URL with a correct repository/ref/path and a 5,000-digit `L...-L...` range, matches its regex and then raises Python's integer-limit `ValueError`. `_latest_release`, direct legacy-reference validation, and `main` propagate that ordinary exception instead of a finite provenance code. This is the same `ValueError` class now handled at JSON parsing, but at later scalar-conversion boundaries.
-
-**Fix:** Parse release components and both range components inside guarded classification blocks, translate `ValueError` after leaving the handler, and pass only validated integers onward. Add direct and real-CLI tests for both an oversized numeric tag and an oversized line range, asserting exact codes, no cause/context or canary retention, and single-line stderr.
-
-```python
-failed = False
-try:
-    parts = tuple(int(part) for part in digit_parts)
-except ValueError:
-    failed = True
-    parts = ()
-if failed:
-    _fail(closed_code)
-```
-
-### CR-02: Recursive matrix metadata bypasses the JSON recursion fix
-
-**File:** `scripts/check_phase2_provenance.py:608-615,722-767,1020-1027`
-**Issue:** `_load_object` correctly closes decoder recursion, but `_contains_none` recursively walks `wire.hermes` afterward without a guard or depth bound. Python's JSON decoder accepts a 500-level nested array in this environment; `_contains_none` then raises `RecursionError`. I reproduced both direct `_verify_design_matrix` and `main` escapes with an otherwise structurally valid matrix case. Thus parser-valid recursive metadata still yields a raw traceback even though decoder-recursive JSON is covered.
-
-**Fix:** Replace `_contains_none` with an iterative traversal over built-in dict/list containers, or catch and classify traversal recursion outside the active handler. Add direct and real-CLI matrix tests whose `wire.hermes` contains a deeply nested array both with and without `null`, asserting a finite matrix code and closed exception state.
-
-```python
-def _contains_none(value: object) -> bool:
-    pending = [value]
-    while pending:
-        item = pending.pop()
-        if item is None:
-            return True
-        if isinstance(item, dict):
-            pending.extend(item.values())
-        elif isinstance(item, list):
-            pending.extend(item)
-    return False
-```
-
-### CR-03: Git output decoding errors bypass the subprocess failure boundary
-
-**File:** `scripts/check_phase2_provenance.py:78-99,129-154,1020-1027`
-**Issue:** `_run_git` uses `text=True`, so `subprocess.run` decodes captured stdout and stderr before returning. The function translates `OSError` only. If Git or a remote ref/error response contains bytes invalid under the process encoding, `subprocess.run` raises `UnicodeDecodeError`; direct `_run_git` and `main` both propagate the raw exception and its retained byte payload instead of `latest-tag-verification-blocked`. I reproduced the call chain with `subprocess.run` raising the exact decoder exception. This contradicts `_run_git`'s stated value-free failure boundary and makes tag/source verification non-total over subprocess output.
-
-**Fix:** Treat `UnicodeError` like `OSError` in `_run_git`, preserving the existing outside-handler `latest-tag-verification-blocked` classification. Add direct and CLI tests that inject undecodable subprocess output and inspect args, formatted traceback, cause/context, canary retention, exact stderr, and exit code 3.
-
-```python
-try:
-    completed = subprocess.run(..., text=True)
-except (OSError, UnicodeError):
-    failed = True
-```
-
-### CR-04: Temporary-directory failures escape verifier setup and cleanup
-
-**File:** `scripts/check_phase2_provenance.py:267-323,943-1007,1020-1027`
-**Issue:** `_fetch_source_tree` constructs `tempfile.TemporaryDirectory` outside any failure-classification boundary, and all three cleanup sites call `TemporaryDirectory.cleanup()` directly. If the system temporary directory is unavailable, full, or denied, creation raises raw `OSError`; cleanup can likewise raise and replace an otherwise closed validation result. I reproduced the creation path with an `OSError("temporary-secret-canary")`: the exception and its value-bearing args escaped unchanged rather than becoming `latest-tag-verification-blocked`. This also breaks the plan's guarantee that temporary-tree failures remain closed and cleanup is guaranteed on every path.
-
-**Fix:** Wrap temporary-directory creation and cleanup in small helpers that capture `OSError` outside the active handler and translate it to `latest-tag-verification-blocked`; ensure a cleanup failure cannot overwrite an already-selected closed provenance failure. Add direct and `main` tests for creation and cleanup failures, including exact exit 3, single-line stderr, no canary, and no cause/context.
-
-```python
-failed = False
-try:
-    temporary = tempfile.TemporaryDirectory(prefix="phase2-provenance-")
-except OSError:
-    failed = True
-    temporary = None
-if failed:
-    _fail("latest-tag-verification-blocked")
-```
+- Exact five-test-file scope: 577 passed without coverage instrumentation.
+- Focused totality regressions: 19 passed, 64 deselected.
+- Ruff formatting and lint for the changed verifier/test files: passed.
+- Repository-configured basedpyright: 0 errors, 0 warnings, 0 notes.
+- No package source, public export, immutable fixture, helper, or non-provenance test changed after `aeab137`; public SSE protocol classification and cleanup regressions remain green in the scoped suite.
 
 ---
 
-_Reviewed: 2026-07-17T01:45:26Z_
+_Reviewed: 2026-07-17T02:09:13Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: deep_
