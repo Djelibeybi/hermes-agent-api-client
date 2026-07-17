@@ -416,6 +416,26 @@ async def test_probe_propagates_typed_capability_failures_safely(
 
 
 @pytest.mark.asyncio
+async def test_probe_rejects_an_oversized_capability_integer_permanently() -> None:
+    """An unparseable integer is malformed input, never a transient condition."""
+    body = b'{"model":"hermes-4", "context_window":' + b"9" * 5000 + b"}"
+    assert len(body) < _MAX_CAPABILITIES_BYTES
+    stream = TrackingAsyncByteStream((body,))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, stream=stream)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        with pytest.raises(HermesProtocolError) as caught:
+            await _probe(client)
+        assert not isinstance(caught.value, HermesTransportError)
+        assert caught.value.retryable is False
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_probe_maps_empty_capability_parser_outcome_to_safe_protocol() -> None:
     """A defensive empty parser outcome remains a sanitized protocol failure."""
     document = _supported_capabilities()

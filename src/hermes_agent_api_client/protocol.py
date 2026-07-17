@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, ClassVar, Literal, Never, cast
@@ -157,6 +157,9 @@ class _DuplicateJsonMemberError(Exception):
     """One materialized JSON object carried the same member name twice."""
 
 
+type _JsonProjector = Callable[[object], object]
+
+
 def _materialize_json_value(value: object) -> object:
     """Recursively convert private pair nodes into ordinary JSON containers."""
     if isinstance(value, _JsonObjectPairs):
@@ -195,7 +198,85 @@ def _last_member_value(value: _JsonObjectPairs, member_name: str) -> object:
 
 _TOOL_PROGRESS_MEMBERS = frozenset(("toolCallId", "tool", "status"))
 _CHAT_CHUNK_MEMBERS = frozenset(("choices", "usage"))
+_CHOICE_MEMBERS = frozenset(("delta", "finish_reason"))
+_DELTA_MEMBERS = frozenset(("role", "content"))
+_USAGE_MEMBERS = frozenset(("prompt_tokens", "completion_tokens", "total_tokens"))
 _TERMINAL_METADATA_MEMBERS = frozenset(("completed", "failed", "partial", "error_code"))
+
+_PROJECTION_FAILURE = object()
+
+
+def _materialize_member(value: object) -> object:
+    """Materialize one approved leaf or report an input-free projection failure."""
+    try:
+        return _materialize_json_value(value)
+    except (RecursionError, _DuplicateJsonMemberError):
+        return _PROJECTION_FAILURE
+
+
+def _project_approved_members(
+    value: _JsonObjectPairs,
+    approved: frozenset[str],
+    nested: Mapping[str, _JsonProjector] | None = None,
+) -> object:
+    """Project unique approved members and discard every additive member.
+
+    Duplicate names are refused only on approved paths: a repeated name inside
+    additive data the wire models ignore never reaches this projection at all.
+    """
+    projected: dict[str, object] = {}
+    for name, member_value in value.pairs:
+        if name not in approved:
+            continue
+        if name in projected:
+            return _PROJECTION_FAILURE
+        project = None if nested is None else nested.get(name)
+        member = (
+            _materialize_member(member_value)
+            if project is None
+            else project(member_value)
+        )
+        if member is _PROJECTION_FAILURE:
+            return _PROJECTION_FAILURE
+        projected[name] = member
+    return projected
+
+
+def _project_nested_object(value: object, approved: frozenset[str]) -> object:
+    """Project one approved sub-object, leaving other shapes to the wire model."""
+    if not isinstance(value, _JsonObjectPairs):
+        return _materialize_member(value)
+    return _project_approved_members(value, approved)
+
+
+def _project_choice_element(value: object) -> object:
+    """Project one approved choices element and its approved delta."""
+    if not isinstance(value, _JsonObjectPairs):
+        return _materialize_member(value)
+    return _project_approved_members(
+        value,
+        _CHOICE_MEMBERS,
+        {"delta": lambda member: _project_nested_object(member, _DELTA_MEMBERS)},
+    )
+
+
+def _project_choices_member(value: object) -> object:
+    """Project the approved choices array element-wise."""
+    if not isinstance(value, list):
+        return _materialize_member(value)
+    projected: list[object] = []
+    for item in cast("list[object]", value):
+        element = _project_choice_element(item)
+        if element is _PROJECTION_FAILURE:
+            return _PROJECTION_FAILURE
+        projected.append(element)
+    return projected
+
+
+_CHAT_CHUNK_NESTED: Mapping[str, _JsonProjector] = {
+    "choices": _project_choices_member,
+    "usage": lambda value: _project_nested_object(value, _USAGE_MEMBERS),
+}
 
 
 def _project_terminal_metadata(value: object) -> _TerminalMetadata | None:
@@ -230,17 +311,10 @@ def _project_tool_progress_object(  # pyright: ignore[reportUnusedFunction]
     if not isinstance(value, _JsonObjectPairs):
         return None
 
-    projected: dict[str, object] = {}
-    try:
-        for name, member_value in value.pairs:
-            if name not in _TOOL_PROGRESS_MEMBERS:
-                continue
-            if name in projected:
-                return None
-            projected[name] = _materialize_json_value(member_value)
-    except (RecursionError, _DuplicateJsonMemberError):
+    projected = _project_approved_members(value, _TOOL_PROGRESS_MEMBERS)
+    if projected is _PROJECTION_FAILURE:
         return None
-    return projected
+    return cast("dict[str, object]", projected)
 
 
 def _project_chat_chunk_object(  # pyright: ignore[reportUnusedFunction]
@@ -256,18 +330,15 @@ def _project_chat_chunk_object(  # pyright: ignore[reportUnusedFunction]
     if terminal_metadata is None:
         return None
 
-    projected: dict[str, object] = {}
-    try:
-        for name, member_value in value.pairs:
-            if name not in _CHAT_CHUNK_MEMBERS:
-                continue
-            if name in projected:
-                return None
-            projected[name] = _materialize_json_value(member_value)
-    except (RecursionError, _DuplicateJsonMemberError):
+    projected = _project_approved_members(
+        value,
+        _CHAT_CHUNK_MEMBERS,
+        _CHAT_CHUNK_NESTED,
+    )
+    if projected is _PROJECTION_FAILURE:
         return None
     return _ProjectedChatChunk(
-        document=projected,
+        document=cast("dict[str, object]", projected),
         terminal_metadata=terminal_metadata,
     )
 

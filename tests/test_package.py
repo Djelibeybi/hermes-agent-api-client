@@ -408,7 +408,10 @@ def test_repository_ignore_rules_keep_the_lockfile_trackable(tmp_path: Path) -> 
         check=True,
     )
     (tmp_path / ".gitignore").write_bytes((project_root / ".gitignore").read_bytes())
-    (tmp_path / ".git" / "info" / "exclude").write_text("")
+    # An empty init template (as pre-commit sets) omits .git/info entirely.
+    exclude = tmp_path / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text("")
     (tmp_path / "uv.lock").touch()
 
     result = subprocess.run(  # noqa: S603

@@ -23,6 +23,10 @@ from hermes_agent_api_client import (
     ToolProgressStatus,
     UsageEvent,
 )
+from hermes_agent_api_client.protocol import (
+    _json_object_pairs_hook,  # pyright: ignore[reportPrivateUsage]
+    _project_chat_chunk_object,  # pyright: ignore[reportPrivateUsage]
+)
 from hermes_agent_api_client.sse import (
     MAX_EVENT_DATA_CHARS,
     MAX_PENDING_BYTES,
@@ -876,6 +880,150 @@ async def test_duplicates_inside_ignored_additive_objects_remain_compatible() ->
         ),
         TerminalEvent(outcome=TerminalOutcome.SUCCESS),
     )
+
+
+@pytest.mark.parametrize(
+    ("label", "members"),
+    [
+        (
+            "choice-additive",
+            (
+                (
+                    "choices",
+                    '[{"delta":{"content":"kept"},"finish_reason":null,'
+                    '"logprobs":{"a":1,"a":2}}]',
+                ),
+            ),
+        ),
+        (
+            "delta-additive",
+            (
+                (
+                    "choices",
+                    '[{"delta":{"content":"kept","future":{"a":1,"a":2}},'
+                    '"finish_reason":null}]',
+                ),
+            ),
+        ),
+        (
+            "usage-additive",
+            (
+                ("choices", '[{"delta":{"content":"kept"},"finish_reason":null}]'),
+                (
+                    "usage",
+                    '{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,'
+                    '"future":{"a":1,"a":2}}',
+                ),
+            ),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_chat_duplicates_under_approved_names_remain_compatible(
+    label: str,
+    members: tuple[tuple[str, str], ...],
+) -> None:
+    """A duplicate nested in ignored additive data is not an approved alias."""
+    del label
+    record = raw_json_object_sse_record(members)
+
+    events = await _decode((record + _canonical_records()[6],))
+
+    assert AssistantDeltaEvent(text="kept") in events
+    assert events[-1] == TerminalEvent(outcome=TerminalOutcome.SUCCESS)
+
+
+@pytest.mark.asyncio
+async def test_chat_projection_retains_only_approved_members() -> None:
+    """Only approved chat members reach the wire models, never raw error text."""
+    record = raw_json_object_sse_record(
+        (
+            ("choices", '[{"delta":{"content":"kept"},"finish_reason":null}]'),
+            ("error", '{"message":"projection-error-canary","type":"RuntimeError"}'),
+        ),
+    )
+    document = _record_document(record)
+    projected = _project_chat_chunk_object(
+        json.loads(json.dumps(document), object_pairs_hook=_json_object_pairs_hook),
+    )
+
+    assert projected is not None
+    assert set(projected.document) == {"choices"}
+    choices = cast("list[dict[str, Any]]", projected.document["choices"])
+    assert set(choices[0]) == {"delta", "finish_reason"}
+    assert set(cast("dict[str, Any]", choices[0]["delta"])) == {"content"}
+    assert "projection-error-canary" not in json.dumps(projected.document)
+
+
+@pytest.mark.parametrize(
+    ("label", "members"),
+    [
+        ("choices-not-a-list", (("choices", '{"delta":{},"finish_reason":null}'),)),
+        ("choice-not-an-object", (("choices", '["not-an-object"]'),)),
+        ("delta-not-an-object", (("choices", '[{"delta":"x","finish_reason":null}]'),)),
+        (
+            "usage-not-an-object",
+            (
+                ("choices", '[{"delta":{"content":"kept"},"finish_reason":null}]'),
+                ("usage", '"not-an-object"'),
+            ),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_malformed_approved_chat_shapes_are_rejected(
+    label: str,
+    members: tuple[tuple[str, str], ...],
+) -> None:
+    """Projection leaves non-conforming approved shapes for the wire models."""
+    del label
+    record = raw_json_object_sse_record(members)
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((record + _canonical_records()[6],))
+
+
+@pytest.mark.asyncio
+async def test_object_valued_approved_leaf_is_rejected() -> None:
+    """An approved scalar leaf carrying an object is materialized, then refused."""
+    progress = raw_json_object_sse_record(
+        (
+            ("toolCallId", '"call-contract-001"'),
+            ("tool", '"home_assistant"'),
+            ("status", '{"nested":"running"}'),
+        ),
+        event="hermes.tool.progress",
+    )
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((progress + _canonical_records()[6],))
+
+
+@pytest.mark.asyncio
+async def test_tool_progress_nested_duplicate_is_a_permanent_failure() -> None:
+    """A duplicate inside an approved tool member never becomes retryable."""
+    progress = raw_json_object_sse_record(
+        (
+            ("toolCallId", '"call-contract-001"'),
+            ("tool", '"home_assistant"'),
+            ("status", '{"a":1,"a":2}'),
+        ),
+        event="hermes.tool.progress",
+    )
+
+    with pytest.raises(HermesProtocolError) as failure:
+        await _decode((progress + _canonical_records()[6],))
+
+    assert failure.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_keepalive_after_the_framing_terminator_is_rejected() -> None:
+    """`[DONE]` bounds the stream: heartbeats may not extend it indefinitely."""
+    records = _canonical_records()
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((records[0], records[6], b": ping\n\n"))
 
 
 @pytest.mark.asyncio

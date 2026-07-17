@@ -300,7 +300,7 @@ class _SSEDecoder:
         """Enforce the one-terminal boundary without retaining raw events."""
         accepted: list[HermesEvent] = []
         for event in events:
-            if isinstance(event, KeepaliveEvent):
+            if isinstance(event, KeepaliveEvent) and not self._done_seen:
                 accepted.append(event)
                 continue
             if self._pending_terminal is not None:
