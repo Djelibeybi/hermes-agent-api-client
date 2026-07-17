@@ -143,8 +143,8 @@ status: complete
 
 The TDD feature was committed through its required gates:
 
-1. **RED: Define the total terminal metadata contract** - `060aabb` (test)
-2. **GREEN: Implement total safe terminal metadata mapping** - `8b9d3a2` (feat)
+1. **RED: Define the total terminal metadata contract** - `81d3667` (test)
+2. **GREEN: Implement total safe terminal metadata mapping** - `560f588` (feat)
 
 No separate refactor commit was needed; the GREEN implementation is compact, named by contract role, and passed every quality gate.
 
@@ -177,7 +177,7 @@ No separate refactor commit was needed; the GREEN implementation is compact, nam
 - **Fix:** Added the required blank-line record boundary, updated all three immutable SHA-256 values, and taught the terminal provenance gate to reject an incomplete final record.
 - **Files modified:** `terminal_length.sse`, `terminal_agent_error.sse`, `terminal_task_exception_contradiction.sse`, `provenance.json`, `scripts/check_phase2_provenance.py`
 - **Verification:** Terminal provenance passes and both whole/bytewise fixture decoding paths are green.
-- **Committed in:** `8b9d3a2`
+- **Committed in:** `560f588`
 
 **2. [Rule 1 - Test Bug] Isolated finish-reason omission from empty-delta validation**
 
@@ -186,7 +186,7 @@ No separate refactor commit was needed; the GREEN implementation is compact, nam
 - **Fix:** Made derived terminal candidates carry the accepted assistant role without changing terminal behavior or fixture bytes.
 - **Files modified:** `tests/test_sse.py`
 - **Verification:** Missing `finish_reason` fails, explicit null emits no terminal itself, and a later DONE establishes default success.
-- **Committed in:** `8b9d3a2`
+- **Committed in:** `560f588`
 
 ---
 
@@ -200,7 +200,7 @@ No separate refactor commit was needed; the GREEN implementation is compact, nam
 
 ## TDD Gate Compliance
 
-- RED commit `060aabb` precedes GREEN commit `8b9d3a2`.
+- RED commit `81d3667` precedes GREEN commit `560f588`.
 - The 185-test targeted baseline passed before RED; RED failed on the missing total terminal contract, then GREEN passed 307 targeted tests.
 - The full suite passes 550 tests with 100% statement and branch coverage.
 - No behavior-preserving refactor commit was necessary.
@@ -228,7 +228,7 @@ None - no external service configuration required.
 ## Self-Check: PASSED
 
 - All nine modified implementation, test, verifier, fixture, and provenance files exist.
-- RED commit `060aabb` and GREEN commit `8b9d3a2` exist in order.
+- RED commit `81d3667` and GREEN commit `560f588` exist in order.
 - Terminal provenance, targeted tests, full 100% coverage, Ruff, basedpyright, verifytypes, build, and distribution gates pass.
 - No TODO, FIXME, placeholder, known stub, uncommitted dependency, or lockfile change remains.
 

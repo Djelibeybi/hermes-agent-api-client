@@ -126,8 +126,8 @@ Any future network/DNS/auth failure exits with the exact `latest-tag-verificatio
 
 Each task was committed atomically:
 
-1. **Task 1: Verify the immutable release target and freeze correlated tool evidence** - `1c9b52d` (test)
-2. **Task 2: Freeze terminal acceptance, unknown-code, and contradiction evidence** - `e5e608c` (test)
+1. **Task 1: Verify the immutable release target and freeze correlated tool evidence** - `cd879b8` (test)
+2. **Task 2: Freeze terminal acceptance, unknown-code, and contradiction evidence** - `f56cad0` (test)
 
 ## Files Created/Modified
 
@@ -156,8 +156,8 @@ Each task was committed atomically:
 - **Issue:** The repository's root `/Scripts/` virtual-environment ignore pattern also matches lowercase `scripts/` on this case-insensitive filesystem, so the new planned verifier did not appear as an untracked file.
 - **Fix:** Force-added only the explicitly planned `scripts/check_phase2_provenance.py` source artifact, matching the already tracked `scripts/verify_dist.py` convention; the ignore rule and generated files were not changed.
 - **Files modified:** None beyond the planned verifier.
-- **Verification:** The verifier is present in commit `1c9b52d`, and both commit hooks ran every configured gate normally.
-- **Committed in:** `1c9b52d`
+- **Verification:** The verifier is present in commit `cd879b8`, and both commit hooks ran every configured gate normally.
+- **Committed in:** `cd879b8`
 
 **2. [Rule 1 - Tracking Bug] Corrected progress values and roadmap cells not persisted by GSD handlers**
 
@@ -201,7 +201,7 @@ None - no external service configuration required.
 ## Self-Check: PASSED
 
 - All six created evidence/verifier files and the modified provenance manifest exist.
-- Task commits `1c9b52d` and `e5e608c` exist in order.
+- Task commits `cd879b8` and `f56cad0` exist in order.
 - Both provenance scopes, the full coverage suite, Ruff, and basedpyright pass.
 - Every new fixture hash and every structured source-anchor hash is machine-verified.
 - No plan-owned source, fixture, dependency, or lock changes remain uncommitted before metadata closeout.

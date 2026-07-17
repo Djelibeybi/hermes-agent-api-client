@@ -107,8 +107,8 @@ status: complete
 
 The TDD feature was committed through its required gates:
 
-1. **RED: Define conversation event vocabulary contract** - `91d9ee4` (test)
-2. **GREEN: Implement strict conversation event vocabulary** - `be2844c` (feat)
+1. **RED: Define conversation event vocabulary contract** - `46414f2` (test)
+2. **GREEN: Implement strict conversation event vocabulary** - `69f4680` (feat)
 
 No separate refactor commit was needed; the GREEN implementation was already compact and passed all quality gates.
 
@@ -139,7 +139,7 @@ No separate refactor commit was needed; the GREEN implementation was already com
 - **Fix:** Changed the rejected canary to `lifecycle secret canary`, whose space is outside the approved `0x21..0x7e` range, while retaining the input-free exception assertion.
 - **Files modified:** `tests/test_protocol.py`
 - **Verification:** Targeted suite passes all validator acceptance/rejection cases.
-- **Committed in:** `be2844c`
+- **Committed in:** `69f4680`
 
 **2. [Rule 1 - Tracking Bug] Corrected progress values not persisted by the state handler**
 
@@ -161,7 +161,7 @@ No separate refactor commit was needed; the GREEN implementation was already com
 
 ## TDD Gate Compliance
 
-- RED `91d9ee4` preceded GREEN `be2844c`.
+- RED `46414f2` preceded GREEN `69f4680`.
 - RED was proven after a 229-test green baseline and failed for the missing contract.
 - GREEN passed 285 targeted tests and the full 410-test suite with 100% branch coverage.
 - No refactor change was necessary.
@@ -179,7 +179,7 @@ None - no external service configuration required.
 ## Self-Check: PASSED
 
 - Required source and test files exist.
-- RED commit `91d9ee4` and GREEN commit `be2844c` exist in order.
+- RED commit `46414f2` and GREEN commit `69f4680` exist in order.
 - Targeted, full coverage, Ruff, strict basedpyright, verifytypes, build, and distribution gates passed.
 - No plan-owned uncommitted source or test changes remain.
 

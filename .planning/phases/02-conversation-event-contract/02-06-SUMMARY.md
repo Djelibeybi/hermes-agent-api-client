@@ -129,14 +129,14 @@ status: complete
 
 ## Task Commits
 
-1. **RED: Expose provenance boundary gaps** - `0d421a9` (test)
-2. **GREEN: Close provenance trust boundaries** - `22c5744` (feat)
-3. **Post-review RED: Cover recursive provenance JSON failures** - `d389cdf` (test)
-4. **Post-review GREEN: Close recursive JSON error boundary** - `fe8d99a` (fix)
-5. **Post-review RED: Expose malformed JSON boundary escapes** - `ff9f57b` (test)
-6. **Post-review GREEN: Close malformed JSON input boundaries** - `aeab137` (fix)
-7. **Post-review RED: Expose remaining provenance exception escapes** - `19cce6c` (test)
-8. **Post-review GREEN: Make provenance validation exception-total** - `865bf19` (fix)
+1. **RED: Expose provenance boundary gaps** - `21d45e9` (test)
+2. **GREEN: Close provenance trust boundaries** - `313e7f9` (feat)
+3. **Post-review RED: Cover recursive provenance JSON failures** - `b9378c7` (test)
+4. **Post-review GREEN: Close recursive JSON error boundary** - `33ef55d` (fix)
+5. **Post-review RED: Expose malformed JSON boundary escapes** - `487e7e2` (test)
+6. **Post-review GREEN: Close malformed JSON input boundaries** - `ddfff89` (fix)
+7. **Post-review RED: Expose remaining provenance exception escapes** - `a0aa8af` (test)
+8. **Post-review GREEN: Make provenance validation exception-total** - `e58dd53` (fix)
 
 No separate refactor commit was needed; the GREEN implementation already centralizes fixture reading, pair decoding, event-specific projection, and closed translation.
 
@@ -170,7 +170,7 @@ No separate refactor commit was needed; the GREEN implementation already central
 - **Fix:** Added direct and real-CLI RED regressions for both JSON entry points, then translated `RecursionError` through the existing outside-active-handler classification pattern.
 - **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
 - **Verification:** 51 focused tests, both live scopes, and the 601-test 100%-coverage suite pass; recursive CLI failures emit exactly one closed line.
-- **Committed in:** `d389cdf` (RED), `fe8d99a` (GREEN)
+- **Committed in:** `b9378c7` (RED), `33ef55d` (GREEN)
 
 **2. [Rule 1 - Bug] Classified oversized JSON integers as protocol failures**
 
@@ -179,7 +179,7 @@ No separate refactor commit was needed; the GREEN implementation already central
 - **Fix:** Caught decoder-wide `ValueError` in `_load_json_safely` and added direct plus HTTP streaming regressions for exact `HermesProtocolError`, closed exception state, and response/source cleanup.
 - **Files modified:** `src/hermes_agent_api_client/sse.py`, `tests/test_sse.py`, `tests/test_transport.py`
 - **Verification:** Both new public regressions and the complete 373-test affected-file suite pass.
-- **Committed in:** `ff9f57b` (RED), `aeab137` (GREEN)
+- **Committed in:** `487e7e2` (RED), `ddfff89` (GREEN)
 
 **3. [Rule 1 - Bug / Rule 2 - Missing Critical] Closed plain ValueError at both provenance JSON boundaries**
 
@@ -188,7 +188,7 @@ No separate refactor commit was needed; the GREEN implementation already central
 - **Fix:** Classified `ValueError` outside active handlers as `invalid-sse-json` or `invalid-provenance-json` and covered all three evidence inputs directly and through `main()`.
 - **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
 - **Verification:** Exact one-line stderr, no traceback/canary, and no cause/context pass for every boundary.
-- **Committed in:** `ff9f57b` (RED), `aeab137` (GREEN)
+- **Committed in:** `487e7e2` (RED), `ddfff89` (GREEN)
 
 **4. [Rule 1 - Bug / Rule 2 - Missing Critical] Validated design-matrix values before hashing**
 
@@ -197,7 +197,7 @@ No separate refactor commit was needed; the GREEN implementation already central
 - **Fix:** Required lists of exact built-in strings before set operations and an exact built-in string before finish-reason lookup, preserving the existing finite codes.
 - **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
 - **Verification:** Six list/dict variants pass both direct and real-CLI closed-code assertions.
-- **Committed in:** `ff9f57b` (RED), `aeab137` (GREEN)
+- **Committed in:** `487e7e2` (RED), `ddfff89` (GREEN)
 
 **5. [Rule 1 - Bug / Rule 2 - Missing Critical] Closed invalid fixture-path resolution**
 
@@ -206,7 +206,7 @@ No separate refactor commit was needed; the GREEN implementation already central
 - **Fix:** Rejected NUL before resolution and translated `OSError`, `RuntimeError`, and `ValueError` from resolution outside the active handler to `invalid-fixture-path`.
 - **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
 - **Verification:** Manifest-level direct and real-CLI tests prove exact code, single-line stderr, and no canary/cause/context.
-- **Committed in:** `ff9f57b` (RED), `aeab137` (GREEN)
+- **Committed in:** `487e7e2` (RED), `ddfff89` (GREEN)
 
 **6. [Rule 1 - Bug / Rule 2 - Missing Critical] Closed integer-limit tag and source-range conversion**
 
@@ -215,7 +215,7 @@ No separate refactor commit was needed; the GREEN implementation already central
 - **Fix:** Guarded every external decimal conversion, cleared value-bearing conversion state, and mapped failures to `invalid-numeric-release-tag` or `invalid-source-line-anchor` after leaving the handler.
 - **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
 - **Verification:** Direct and real-CLI oversized tag/range tests emit exact one-line codes with no canary, cause, context, or traceback.
-- **Committed in:** `19cce6c` (RED), `865bf19` (GREEN)
+- **Committed in:** `a0aa8af` (RED), `e58dd53` (GREEN)
 
 **7. [Rule 1 - Bug / Rule 2 - Missing Critical] Removed recursive matrix metadata traversal**
 
@@ -224,7 +224,7 @@ No separate refactor commit was needed; the GREEN implementation already central
 - **Fix:** Replaced recursion with an iterative walk over exact built-in dictionaries/lists while preserving null detection semantics.
 - **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
 - **Verification:** Deep metadata with and without null reaches its intended finite matrix result through direct and real-CLI paths.
-- **Committed in:** `19cce6c` (RED), `865bf19` (GREEN)
+- **Committed in:** `a0aa8af` (RED), `e58dd53` (GREEN)
 
 **8. [Rule 1 - Bug / Rule 2 - Missing Critical] Closed Git output decoding failures**
 
@@ -233,7 +233,7 @@ No separate refactor commit was needed; the GREEN implementation already central
 - **Fix:** Classified `UnicodeError` with `OSError` outside the active subprocess handler as `latest-tag-verification-blocked`.
 - **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
 - **Verification:** Direct and executable tests prove one closed arg, no payload/cause/context, exact stderr, and exit 3.
-- **Committed in:** `19cce6c` (RED), `865bf19` (GREEN)
+- **Committed in:** `a0aa8af` (RED), `e58dd53` (GREEN)
 
 **9. [Rule 1 - Bug / Rule 2 - Missing Critical] Made temporary-tree ownership exception-total**
 
@@ -242,7 +242,7 @@ No separate refactor commit was needed; the GREEN implementation already central
 - **Fix:** Added closed creation/cleanup/finalization helpers, cleaned failed fetch initialization, applied them to all three owners, and preserved any already-selected failure ahead of cleanup failure.
 - **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
 - **Verification:** Creation, initialization, cleanup-only, and validation-plus-cleanup direct/CLI cases pass with correct precedence and exit taxonomy.
-- **Committed in:** `19cce6c` (RED), `865bf19` (GREEN)
+- **Committed in:** `a0aa8af` (RED), `e58dd53` (GREEN)
 
 ---
 
@@ -256,10 +256,10 @@ No separate refactor commit was needed; the GREEN implementation already central
 
 ## TDD Gate Compliance
 
-- RED commit `0d421a9` precedes GREEN commit `22c5744`.
-- Post-review RED commit `d389cdf` precedes post-review GREEN fix `fe8d99a`.
-- Malformed-input RED commit `ff9f57b` precedes GREEN fix `aeab137`.
-- Totality RED commit `19cce6c` precedes GREEN fix `865bf19`.
+- RED commit `21d45e9` precedes GREEN commit `313e7f9`.
+- Post-review RED commit `b9378c7` precedes post-review GREEN fix `33ef55d`.
+- Malformed-input RED commit `487e7e2` precedes GREEN fix `ddfff89`.
+- Totality RED commit `a0aa8af` precedes GREEN fix `e58dd53`.
 - RED failed on approved duplicate acceptance, evidence-role forgery, and value-bearing/context-retaining diagnostics while the additive duplicate control passed.
 - The first continuation RED proved raw direct and CLI `RecursionError` failures.
 - The second continuation RED proved 15 wrong-taxonomy or raw `ValueError`/`TypeError` failures; GREEN passes all 64 provenance tests and all 373 tests in the affected files. No behavior-preserving refactor commit was necessary.
@@ -289,7 +289,7 @@ None - no external service configuration required.
 ## Self-Check: PASSED
 
 - All five modified implementation/test files exist and contain no stub markers.
-- Original RED/GREEN `0d421a9` → `22c5744`, recursion continuation `d389cdf` → `fe8d99a`, malformed-input continuation `ff9f57b` → `aeab137`, and totality continuation `19cce6c` → `865bf19` exist in the required order.
+- Original RED/GREEN `21d45e9` → `313e7f9`, recursion continuation `b9378c7` → `33ef55d`, malformed-input continuation `487e7e2` → `ddfff89`, and totality continuation `a0aa8af` → `e58dd53` exist in the required order.
 - Focused, live, full-coverage, lint, typing, build, and distribution gates pass.
 - No public API export, fixture, dependency declaration, lockfile, new endpoint, or new external trust surface changed.
 

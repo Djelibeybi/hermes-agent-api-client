@@ -107,9 +107,9 @@ status: complete
 
 The TDD feature was committed through its required gates:
 
-1. **RED: Define duplicate-aware tool decoding contract** - `ed6c0bb` (test)
-2. **RED: Cover approved chat duplicate paths** - `c984e27` (test)
-3. **GREEN: Implement duplicate-aware tool decoding** - `762abda` (feat)
+1. **RED: Define duplicate-aware tool decoding contract** - `63fa275` (test)
+2. **RED: Cover approved chat duplicate paths** - `3d5d4d2` (test)
+3. **GREEN: Implement duplicate-aware tool decoding** - `9baeadb` (feat)
 
 No separate refactor commit was needed; the GREEN implementation was already compact and passed every quality gate.
 
@@ -139,7 +139,7 @@ No separate refactor commit was needed; the GREEN implementation was already com
 - **Fix:** Added the required second LF and updated the manifest SHA-256 without changing the fixture's lifecycle facts or provenance classification.
 - **Files modified:** `tests/fixtures/hermes/v2026.7.7.2/chat_completions/tool_progress_pair.sse`, `tests/fixtures/hermes/v2026.7.7.2/provenance.json`
 - **Verification:** `scripts/check_phase2_provenance.py --scope release-and-tool` passes, and whole/bytewise immutable fixture decoding is green.
-- **Committed in:** `ed6c0bb`
+- **Committed in:** `63fa275`
 
 **2. [Rule 1 - Tracking Bug] Corrected progress values not persisted by the GSD handlers**
 
@@ -162,7 +162,7 @@ No separate refactor commit was needed; the GREEN implementation was already com
 
 ## TDD Gate Compliance
 
-- RED commits `ed6c0bb` and `c984e27` precede GREEN commit `762abda`.
+- RED commits `63fa275` and `3d5d4d2` precede GREEN commit `9baeadb`.
 - Baseline `tests/test_sse.py` was 100/100 green before RED; RED then failed specifically on approved duplicate collapse and private-pair secrecy behavior.
 - GREEN passed 118 targeted SSE tests and the full 428-test suite with 100% branch coverage.
 - No behavior-preserving refactor change was necessary.
@@ -180,7 +180,7 @@ None - no external service configuration required.
 ## Self-Check: PASSED
 
 - All six modified source, test, helper, fixture, and provenance files exist.
-- RED commits `ed6c0bb`/`c984e27` and GREEN commit `762abda` exist in order.
+- RED commits `63fa275`/`3d5d4d2` and GREEN commit `9baeadb` exist in order.
 - Release/tool provenance, targeted SSE tests, full branch coverage, Ruff, basedpyright, verifytypes, build, and distribution verification pass.
 - No TODO, FIXME, placeholder, or goal-blocking stub was introduced.
 

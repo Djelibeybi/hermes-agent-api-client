@@ -100,8 +100,8 @@ status: complete
 
 The TDD feature was committed through its required gates:
 
-1. **RED: Expose provenance trust defects** - `824c5db` (test)
-2. **GREEN: Bind provenance to validated evidence** - `7853692` (feat)
+1. **RED: Expose provenance trust defects** - `ef0e681` (test)
+2. **GREEN: Bind provenance to validated evidence** - `bc65601` (feat)
 
 No separate refactor commit was needed; the GREEN implementation is factored into identity, manifest, normalization, and comparison helpers and passes every quality gate.
 
@@ -141,7 +141,7 @@ No separate refactor commit was needed; the GREEN implementation is factored int
 
 ## TDD Gate Compliance
 
-- RED commit `824c5db` precedes GREEN commit `7853692`.
+- RED commit `ef0e681` precedes GREEN commit `bc65601`.
 - RED produced 13 intended trust-boundary failures and one control pass against the prior verifier.
 - GREEN passes all 14 focused adversarial cases.
 - No behavior-preserving refactor commit was necessary.
@@ -156,7 +156,7 @@ No separate refactor commit was needed; the GREEN implementation is factored int
 - `uv run --no-sync basedpyright` and `--verifytypes` - passed with 100% type completeness.
 - `uv run --no-sync python -m compileall -q src scripts tests` - passed.
 - The GREEN commit hook also passed lock validation, distribution build, and standalone distribution verification.
-- `git diff 48b9d9c..HEAD -- pyproject.toml uv.lock tests/fixtures src` - empty.
+- `git diff 01a88e9..HEAD -- pyproject.toml uv.lock tests/fixtures src` - empty.
 
 ## User Setup Required
 
@@ -171,7 +171,7 @@ None - no external service configuration required.
 ## Self-Check: PASSED
 
 - Both planned implementation/test files exist and no fixture, source package, dependency declaration, or lockfile changed.
-- RED commit `824c5db` and GREEN commit `7853692` exist in the required order.
+- RED commit `ef0e681` and GREEN commit `bc65601` exist in the required order.
 - Both live provenance scopes, the 564-test 100%-coverage suite, Ruff, basedpyright, verifytypes, compile/build, and distribution verification pass.
 - No TODO, FIXME, placeholder, known stub, untracked generated artifact, or undeclared threat surface remains.
 
