@@ -323,7 +323,7 @@ def _load_json(payload: bytes) -> tuple[bool, object]:
     """Decode JSON without retaining parser errors or rejected response bytes."""
     try:
         return (True, json.loads(payload))
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError, UnicodeError):
         return (False, None)
 
 
