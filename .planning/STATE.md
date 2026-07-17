@@ -4,11 +4,11 @@ milestone: v0.3.0
 milestone_name: Conversation Contract
 current_phase: 3
 current_phase_name: Session Header Safety
-status: planning
+status: "Phase 02 shipped — PR #5"
 stopped_at: Phase 2 complete; ready to discuss Phase 3
-last_updated: "2026-07-17T02:22:57.078Z"
+last_updated: "2026-07-17T03:15:32.380Z"
 last_activity: 2026-07-17
-last_activity_desc: Phase 02 complete, transitioned to Phase 3
+last_activity_desc: Phase 02 shipped as PR #5; Phase 3 remains ready to discuss
 progress:
   total_phases: 3
   completed_phases: 1
@@ -30,8 +30,8 @@ See: `.planning/PROJECT.md` (updated 2026-07-17)
 
 Phase: 3 — Session Header Safety
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-07-17 — Phase 02 complete, transitioned to Phase 3
+Status: Phase 02 shipped — PR #5
+Last activity: 2026-07-17 — Phase 02 shipped as PR #5; Phase 3 remains ready to discuss
 
 Progress: [███░░░░░░░] 33%
 
