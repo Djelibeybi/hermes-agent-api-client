@@ -1,6 +1,6 @@
 ---
 phase: 02-conversation-event-contract
-reviewed: 2026-07-17T01:12:04Z
+reviewed: 2026-07-17T01:45:26Z
 depth: deep
 files_reviewed: 17
 files_reviewed_list:
@@ -31,95 +31,102 @@ status: issues_found
 
 # Phase 2: Code Review Report
 
-**Reviewed:** 2026-07-17T01:12:04Z
+**Reviewed:** 2026-07-17T01:45:26Z
 **Depth:** deep
 **Files Reviewed:** 17
 **Status:** issues_found
 
 ## Summary
 
-The post-review recursion fix is correct: both lifecycle and object-file JSON now translate `RecursionError` outside the active handler to their exact closed codes, and the real CLI paths emit one line with no traceback or input canary. I also confirmed that the four new RED tests fail before `fe8d99a`: the `d389cdf` implementation propagates `RecursionError` through both direct entry points and through `main`. The current 51-test provenance suite and Ruff pass.
+The four reported malformed-input defects are fixed. Oversized JSON integers now become `HermesProtocolError` publicly and exact closed provenance codes internally; decoder-recursive JSON remains closed; matrix references and finish reasons are exact-type checked before hashing; and NUL/resolution failures become `invalid-fixture-path`. Commit `4cbeb93` records those `aeab137` fixes accurately. The exact five-test-file review scope passes all 558 tests without coverage instrumentation. Executing the pre-fix `aeab137^` implementation reproduced the intended RED outcomes (`HermesTransportError`, raw `ValueError`, raw `TypeError`, and raw path `ValueError`), while the earlier recursion implementation propagated raw `RecursionError` through both direct and `main` paths.
 
-The broader malformed-input boundary is still not total. Python's JSON decoder also raises plain `ValueError` for a valid 5,000-digit JSON integer; the public SSE decoder misclassifies that protocol input as a retryable transport failure, while both verifier JSON entry points let it escape as a raw traceback. Two other valid JSON shapes likewise escape the verifier through unvalidated hash/set operations and a NUL-bearing fixture path. The reported 601 tests at 100% coverage do not exercise these exception variants.
+A systematic pass over the remaining parsing, validation, and verifier-setup operations found four ordinary-exception escapes. Oversized numeric release tags and legacy source ranges can trigger raw integer-conversion `ValueError`; recursive but parser-valid matrix metadata can trigger raw `RecursionError`; undecodable Git output can escape `_run_git` as `UnicodeDecodeError`; and temporary-directory creation can escape as raw `OSError`. Each bypasses `main`'s finite `ProvenanceError` boundary.
 
 ## Prior Finding Re-evaluation
 
-- **Release/commit identity — CLOSED.** Detached `HEAD`, manifest identity, entry identity, source references, and fixture hashes remain bound to externally supplied release identity.
-- **Production-equivalent duplicate handling — CLOSED.** Compatibility normalization reuses the production pair hook and approved-path projectors, rejects all nine same/conflicting approved duplicate families, and still accepts ignored additive duplicates.
-- **Exact lifecycle evidence roles — CLOSED.** `_normalize_lifecycle_events` checks every required path against `_EXPECTED_KINDS` for canonical and newer evidence.
-- **Recursive JSON diagnostic CR-01 — CLOSED.** `_load_object` and `_json_pairs` now catch `RecursionError`, leave the handler, and raise `invalid-provenance-json` or `invalid-sse-json` with no cause/context. Direct tests check exception args and formatted traceback; CLI tests check exact single-line stderr and absence of canaries/tracebacks. Running the same direct and `main` call chains from `fe8d99a^` reproduced four raw `RecursionError` escapes, proving the RED tests genuinely cover the pre-fix defect.
-- **General closed-diagnostic contract — NOT CLOSED.** The recursion variant is fixed, but CR-02 through CR-04 below prove remaining valid JSON/path inputs that bypass the finite-code boundary.
+- **Large JSON integers — CLOSED.** `ValueError` is caught at the public SSE and both provenance JSON boundaries. Direct SSE, HTTP client cleanup, provenance, design-matrix, lifecycle, and CLI regressions pass with the intended protocol/code taxonomy.
+- **Recursive JSON — CLOSED at both decoders.** Lifecycle JSON maps to `invalid-sse-json`; provenance and matrix JSON map to `invalid-provenance-json`; direct exceptions have no cause/context and CLI stderr is a single closed line.
+- **Non-string design-matrix members — CLOSED for the reported members.** Root refs, case refs, and `finish_reason` are validated before set/dict operations, and list/dict variants fail with finite matrix codes.
+- **Invalid/NUL fixture paths — CLOSED.** NUL is rejected before resolution; `OSError`, `RuntimeError`, and `ValueError` from resolution are translated after leaving the handler; escapes retain their separate `fixture-path-escape` code.
+- **RED validity — CONFIRMED.** Running `aeab137^` through the same direct boundaries produced raw `ValueError` for oversized JSON and NUL paths, raw `TypeError` for malformed matrix refs, and retryable `HermesTransportError` for public SSE. The recursion pre-fix source likewise produced raw `RecursionError` from both direct boundaries and both `main` call chains.
 
 ## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: Oversized JSON integers are misclassified as retryable transport failures
+### CR-01: Numeric tags and legacy source ranges can escape as raw integer-conversion errors
 
-**File:** `src/hermes_agent_api_client/sse.py:81-86,168-175,453-468,508-517`
-**Issue:** `_load_json_safely` catches `JSONDecodeError`, `RecursionError`, and `UnicodeError`, but Python 3.13's `json.loads` raises plain `ValueError` when a JSON integer exceeds the interpreter's 4,300-digit conversion limit. A 5,000-digit integer is valid JSON and fits comfortably under `MAX_EVENT_DATA_CHARS`. I placed one in an otherwise valid terminal SSE chunk; `_load_json_safely` propagated `ValueError`, the broad iterator-body handler treated it as an opaque source exception, and the public decoder raised `HermesTransportError(transient=True)` instead of `HermesProtocolError`. Malformed wire data is therefore incorrectly advertised as a retryable network failure, which can drive inappropriate retries and violates the transport/protocol taxonomy.
+**File:** `scripts/check_phase2_provenance.py:157-168,364-376,1020-1027`
+**Issue:** `_version_key` and `_verify_legacy_source_ref` validate only regex shape before calling `int()` on externally controlled digit strings. A numeric release tag such as `v<5000 digits>.1`, or a valid manifest URL with a correct repository/ref/path and a 5,000-digit `L...-L...` range, matches its regex and then raises Python's integer-limit `ValueError`. `_latest_release`, direct legacy-reference validation, and `main` propagate that ordinary exception instead of a finite provenance code. This is the same `ValueError` class now handled at JSON parsing, but at later scalar-conversion boundaries.
 
-**Fix:** Treat every decoder `ValueError` as a closed JSON parse failure inside `_load_json_safely` (with `JSONDecodeError` already a subclass), then add direct SSE and client streaming regressions using a 5,000-digit additive integer. Assert `HermesProtocolError`, no cause/context or canary retention, and response cleanup.
-
-```python
-try:
-    return (True, json.loads(data, object_pairs_hook=_json_object_pairs_hook))
-except (ValueError, RecursionError, UnicodeError):
-    return (False, None)
-```
-
-### CR-02: Plain JSON `ValueError` still escapes both provenance parse boundaries
-
-**File:** `scripts/check_phase2_provenance.py:102-110,502-510,995-1002`
-**Issue:** The post-review fix adds `RecursionError` but still assumes all other JSON parse failures are `JSONDecodeError`. Passing either `_json_pairs` or `_load_object` a valid object containing a 5,000-digit integer raises the same uncaught plain `ValueError`. `main` catches only `ProvenanceError`, so lifecycle evidence, canonical/newer provenance, and the design matrix can still produce a raw multiline traceback instead of `invalid-sse-json` or `invalid-provenance-json`. This is the same closed-diagnostic trust boundary and is reachable with a roughly 5 KiB evidence value.
-
-**Fix:** Catch `ValueError` at both JSON entry points, classify it outside the active handler, and extend the direct and real-CLI matrix to cover oversized integer values for lifecycle SSE, provenance JSON, and design-matrix JSON. Reuse `_assert_closed_error` and exact stderr assertions.
+**Fix:** Parse release components and both range components inside guarded classification blocks, translate `ValueError` after leaving the handler, and pass only validated integers onward. Add direct and real-CLI tests for both an oversized numeric tag and an oversized line range, asserting exact codes, no cause/context or canary retention, and single-line stderr.
 
 ```python
-except (ValueError, RecursionError, UnicodeError):
-    failed = True
-    value = None
-```
-
-### CR-03: Valid design-matrix containers can crash validation with `TypeError`
-
-**File:** `scripts/check_phase2_provenance.py:709-740,995-1002`
-**Issue:** `_verify_design_matrix` constructs sets and performs a dictionary lookup before validating that editor-controlled JSON members are strings. Each of these valid JSON mutations raises `TypeError: unhashable type: 'list'`: a nested list in root `decision_refs`, a nested list in a case's `decision_refs`, or a list-valued `wire.finish_reason`. The error bypasses `ProvenanceError` and `main`, yielding a raw traceback. Fixture hashing does not protect this boundary because a newer evidence root controls both the matrix bytes and its recorded digest.
-
-**Fix:** Validate root refs as a list of exact strings before `set`, validate every case ref the same way, and require `finish_reason` to be a string before `required_by_finish.get`. Fail with the existing finite matrix codes. Add direct and CLI tests for list/dict values at all three positions, including closed exception state and exact stderr.
-
-```python
-refs = matrix.get("decision_refs")
-if (
-    not isinstance(refs, list)
-    or any(type(ref) is not str for ref in refs)
-    or set(refs) != _DECISIONS
-):
-    _fail("terminal-matrix-decision-set")
-```
-
-### CR-04: A NUL-bearing manifest path bypasses the closed fixture-path failure
-
-**File:** `scripts/check_phase2_provenance.py:392-396,404-430,995-1002`
-**Issue:** `_require_string` accepts a JSON path containing `\u0000`, after which `Path.resolve()` raises `ValueError: lstat: embedded null character in path`. That operation occurs before the guarded `read_bytes` block, so the value bypasses `missing-fixture`/`fixture-path-escape` and escapes `main` as a raw traceback. I reproduced both the direct `_safe_fixture_path` and CLI propagation paths. This leaves the earlier fixture-path diagnostic closure incomplete for a valid JSON string.
-
-**Fix:** Reject NUL and other invalid path scalars before filesystem resolution, and translate `resolve()` failures outside the active handler to one constant fixture-path code. Add a manifest-level direct test and a real `main` test with `fixture-secret-canary\u0000.sse`, asserting exact one-line stderr, no canary, and no cause/context.
-
-```python
-if "\0" in relative:
-    _fail("invalid-fixture-path")
 failed = False
 try:
-    path = (version_root / relative).resolve()
-except (OSError, RuntimeError, ValueError):
+    parts = tuple(int(part) for part in digit_parts)
+except ValueError:
     failed = True
-    path = version_root
+    parts = ()
 if failed:
-    _fail("invalid-fixture-path")
+    _fail(closed_code)
+```
+
+### CR-02: Recursive matrix metadata bypasses the JSON recursion fix
+
+**File:** `scripts/check_phase2_provenance.py:608-615,722-767,1020-1027`
+**Issue:** `_load_object` correctly closes decoder recursion, but `_contains_none` recursively walks `wire.hermes` afterward without a guard or depth bound. Python's JSON decoder accepts a 500-level nested array in this environment; `_contains_none` then raises `RecursionError`. I reproduced both direct `_verify_design_matrix` and `main` escapes with an otherwise structurally valid matrix case. Thus parser-valid recursive metadata still yields a raw traceback even though decoder-recursive JSON is covered.
+
+**Fix:** Replace `_contains_none` with an iterative traversal over built-in dict/list containers, or catch and classify traversal recursion outside the active handler. Add direct and real-CLI matrix tests whose `wire.hermes` contains a deeply nested array both with and without `null`, asserting a finite matrix code and closed exception state.
+
+```python
+def _contains_none(value: object) -> bool:
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if item is None:
+            return True
+        if isinstance(item, dict):
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    return False
+```
+
+### CR-03: Git output decoding errors bypass the subprocess failure boundary
+
+**File:** `scripts/check_phase2_provenance.py:78-99,129-154,1020-1027`
+**Issue:** `_run_git` uses `text=True`, so `subprocess.run` decodes captured stdout and stderr before returning. The function translates `OSError` only. If Git or a remote ref/error response contains bytes invalid under the process encoding, `subprocess.run` raises `UnicodeDecodeError`; direct `_run_git` and `main` both propagate the raw exception and its retained byte payload instead of `latest-tag-verification-blocked`. I reproduced the call chain with `subprocess.run` raising the exact decoder exception. This contradicts `_run_git`'s stated value-free failure boundary and makes tag/source verification non-total over subprocess output.
+
+**Fix:** Treat `UnicodeError` like `OSError` in `_run_git`, preserving the existing outside-handler `latest-tag-verification-blocked` classification. Add direct and CLI tests that inject undecodable subprocess output and inspect args, formatted traceback, cause/context, canary retention, exact stderr, and exit code 3.
+
+```python
+try:
+    completed = subprocess.run(..., text=True)
+except (OSError, UnicodeError):
+    failed = True
+```
+
+### CR-04: Temporary-directory failures escape verifier setup and cleanup
+
+**File:** `scripts/check_phase2_provenance.py:267-323,943-1007,1020-1027`
+**Issue:** `_fetch_source_tree` constructs `tempfile.TemporaryDirectory` outside any failure-classification boundary, and all three cleanup sites call `TemporaryDirectory.cleanup()` directly. If the system temporary directory is unavailable, full, or denied, creation raises raw `OSError`; cleanup can likewise raise and replace an otherwise closed validation result. I reproduced the creation path with an `OSError("temporary-secret-canary")`: the exception and its value-bearing args escaped unchanged rather than becoming `latest-tag-verification-blocked`. This also breaks the plan's guarantee that temporary-tree failures remain closed and cleanup is guaranteed on every path.
+
+**Fix:** Wrap temporary-directory creation and cleanup in small helpers that capture `OSError` outside the active handler and translate it to `latest-tag-verification-blocked`; ensure a cleanup failure cannot overwrite an already-selected closed provenance failure. Add direct and `main` tests for creation and cleanup failures, including exact exit 3, single-line stderr, no canary, and no cause/context.
+
+```python
+failed = False
+try:
+    temporary = tempfile.TemporaryDirectory(prefix="phase2-provenance-")
+except OSError:
+    failed = True
+    temporary = None
+if failed:
+    _fail("latest-tag-verification-blocked")
 ```
 
 ---
 
-_Reviewed: 2026-07-17T01:12:04Z_
+_Reviewed: 2026-07-17T01:45:26Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: deep_
