@@ -29,7 +29,11 @@ async def ask_hermes(request: dict[str, object]) -> None:
         capabilities = await client.probe_capabilities()
         assert capabilities.chat_completions_streaming
 
-        async for event in client.stream_chat_events(request):
+        async for event in client.stream_chat_events(
+            request,
+            session_id="profile.chat-001",
+            session_key="home-assistant-instance-001",
+        ):
             if isinstance(event, TerminalEvent):
                 print(event.outcome)
 ```
@@ -93,6 +97,14 @@ The package supports only these Hermes operations:
 The exact OpenAI-compatible request document remains a caller-owned mapping;
 the client does not define additional request-model semantics.
 
+Each stream accepts independent keyword-only `session_id` and `session_key`
+values. Non-`None` values map only to `X-Hermes-Session-Id` and
+`X-Hermes-Session-Key`; the client never derives identifiers or accepts an
+arbitrary headers mapping. Values must be exact built-in strings containing
+1 through 256 visible ASCII characters. Session IDs additionally reject path
+shapes (`..`, `/`, `\\`, or a leading drive-letter prefix). Invalid values fail
+locally as a non-retryable `HermesTransportError` before network dispatch.
+
 A successful capability probe returns an immutable `HermesCapabilities` value
 with this supported shape:
 
@@ -114,7 +126,11 @@ whitespace-only, non-string, and over-limit values are rejected.
 
 The stream yields immutable `AssistantDeltaEvent`, `ToolProgressEvent`,
 `UsageEvent`, `KeepaliveEvent`, and `TerminalEvent` values. Terminal outcomes
-are `success`, `length`, or `upstream_error`.
+are `success`, `length`, or `upstream_error`. Tool progress exposes only a
+bounded `tool_call_id`, `tool_name`, and the closed `running`/`completed`
+status. Terminal events expose only `outcome`, `partial`, and the optional
+closed failure reasons `output_truncated`, `agent_error`, or `unknown`;
+additional terminal metadata is rejected.
 
 Public failures derive from `HermesContractError` and expose only safe
 `category`, `status_code`, and `retryable` metadata. `HermesIdentityError` and

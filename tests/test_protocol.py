@@ -882,6 +882,14 @@ def test_terminal_event_defaults_and_strict_metadata_contract() -> None:
             outcome=TerminalOutcome.UPSTREAM_ERROR,
             failure_reason="agent_error",  # type: ignore[arg-type]
         )
+    for forbidden_field in ("completed", "failed", "error_code", "error"):
+        with pytest.raises(ValidationError):
+            TerminalEvent.model_validate(
+                {
+                    "outcome": TerminalOutcome.UPSTREAM_ERROR,
+                    forbidden_field: True,
+                }
+            )
     with pytest.raises(ValidationError, match="Instance is frozen"):
         failure.partial = False
 

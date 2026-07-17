@@ -44,6 +44,8 @@ _CHAT_STREAM_TIMEOUT = httpx.Timeout(
 _SUPPORTED_SCHEMES = frozenset({"http", "https"})
 _VISIBLE_ASCII_MIN = 0x21
 _VISIBLE_ASCII_MAX = 0x7E
+_MAX_SESSION_VALUE_LENGTH = 256
+_WINDOWS_DRIVE_PREFIX_LENGTH = 2
 _MAX_CONTENT_LENGTH_DIGITS = 20
 
 _INACTIVE_CLIENT_MESSAGE = "HermesAgentApiClient is not active"
@@ -147,6 +149,63 @@ def _request_headers(  # pyright: ignore[reportUnusedFunction]
     if json_body:
         headers["Content-Type"] = "application/json"
     return headers
+
+
+def _is_valid_session_value(value: object, *, reject_path_shape: bool) -> bool:
+    """Return whether one optional session value meets the exact local contract."""
+    if value is None:
+        return True
+    if type(value) is not str:
+        return False
+    if not 1 <= len(value) <= _MAX_SESSION_VALUE_LENGTH:
+        return False
+    if any(
+        not _VISIBLE_ASCII_MIN <= ord(character) <= _VISIBLE_ASCII_MAX
+        for character in value
+    ):
+        return False
+    return not (
+        reject_path_shape
+        and (
+            ".." in value
+            or "/" in value
+            or "\\" in value
+            or (
+                len(value) >= _WINDOWS_DRIVE_PREFIX_LENGTH
+                and value[0].isalpha()
+                and value[1] == ":"
+            )
+        )
+    )
+
+
+def _chat_request_headers(
+    headers: Mapping[str, str],
+    *,
+    session_id: str | None,
+    session_key: str | None,
+) -> dict[str, str] | None:
+    """Build fresh request headers after secret-safe session validation."""
+    invalid = not _is_valid_session_value(
+        session_id,
+        reject_path_shape=True,
+    ) or not _is_valid_session_value(
+        session_key,
+        reject_path_shape=False,
+    )
+    if invalid:
+        headers = {}
+        session_id = None
+        session_key = None
+        return None
+
+    request_headers = dict(headers)
+    request_headers["Content-Type"] = "application/json"
+    if session_id is not None:
+        request_headers["X-Hermes-Session-Id"] = session_id
+    if session_key is not None:
+        request_headers["X-Hermes-Session-Key"] = session_key
+    return request_headers
 
 
 def _serialize_request(request: Mapping[str, object]) -> bytes:
@@ -385,6 +444,7 @@ async def _stream_chat_events(  # pyright: ignore[reportUnusedFunction]  # noqa:
     endpoint = _operation_url(base_url, "/v1/chat/completions")
     request_headers = dict(headers)
     request_headers["Content-Type"] = "application/json"
+    headers = {}
     request_body = _serialize_request_safely(request)
     if request_body is None:
         del http_client, base_url, headers, request, endpoint
@@ -604,9 +664,12 @@ class HermesAgentApiClient:
             _reraise_scrubbed_failure(failure)
         return cast("HermesCapabilities", result)
 
-    async def stream_chat_events(
+    async def stream_chat_events(  # noqa: C901, PLR0915 - explicit secret cleanup
         self,
         request: Mapping[str, object],
+        *,
+        session_id: str | None = None,
+        session_key: str | None = None,
     ) -> AsyncIterator[HermesEvent]:
         """Stream chat events using this client's bound endpoint and auth."""
         active: httpx.AsyncClient | None = None
@@ -621,6 +684,20 @@ class HermesAgentApiClient:
             _raise_inactive_client()
         base_url: httpx.URL | None = self._base_url
         headers: Mapping[str, str] = self._headers
+        operation_headers = _chat_request_headers(
+            headers,
+            session_id=session_id,
+            session_key=session_key,
+        )
+        session_id = None
+        session_key = None
+        headers = {}
+        if operation_headers is None:
+            active = None
+            base_url = None
+            request = {}
+            del self
+            _raise_transport_failure(transient=False)
         del self
         event: HermesEvent | None = None
         operation_failure: BaseException | None = None
@@ -628,10 +705,11 @@ class HermesAgentApiClient:
             _stream_chat_events(
                 active,
                 base_url,
-                headers,
+                operation_headers,
                 request,
             )
         )
+        operation_headers = {}
         try:
             async for event in delegated_stream:
                 yield event
