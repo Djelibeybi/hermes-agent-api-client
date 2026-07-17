@@ -2,7 +2,7 @@
 phase: 02-conversation-event-contract
 plan: 06
 subsystem: testing
-tags: [provenance, duplicate-json, evidence-roles, diagnostics, tdd]
+tags: [provenance, duplicate-json, malformed-json, evidence-roles, diagnostics, sse, tdd]
 
 requires:
   - phase: 02-conversation-event-contract
@@ -10,7 +10,8 @@ requires:
 provides:
   - production-faithful pair-preserving lifecycle normalization for provenance compatibility
   - exact release-agnostic evidence-role enforcement for every required lifecycle fixture
-  - closed context-free provenance errors, including recursive JSON decoder failures, and single-line CLI diagnostics
+  - closed context-free provenance errors for recursive, oversized-integer, malformed-container, and invalid-path inputs
+  - public SSE classification of JSON decoder ValueError as a non-retryable protocol failure
 affects: [phase-2-verification, phase-4-contract-verification]
 
 tech-stack:
@@ -18,22 +19,31 @@ tech-stack:
   patterns:
     - internal provenance verification reuses production approved-path JSON projectors
     - lower-level failures are classified outside active exception handlers before closed errors are raised
+    - editor-controlled values are exact-type validated before hash/set operations or filesystem resolution
 
 key-files:
   created: []
   modified:
     - scripts/check_phase2_provenance.py
+    - src/hermes_agent_api_client/sse.py
     - tests/test_phase2_provenance.py
+    - tests/test_sse.py
+    - tests/test_transport.py
 
 key-decisions:
   - "Lifecycle compatibility uses the production pair hook plus tool/chat projectors, so approved duplicates reject while ignored additive duplicates remain compatible."
   - "Every required lifecycle path must match its exact _EXPECTED_KINDS role before any fixture bytes are normalized."
   - "Provenance failures expose one finite constant code and translate lower-level exceptions only after leaving the active handler."
   - "RecursionError is classified at both JSON entry points as the existing boundary-specific closed parse code."
+  - "Plain JSON decoder ValueError is malformed protocol/provenance input, never a retryable transport failure or raw verifier exception."
+  - "Design-matrix citations and finish reasons must be exact built-in strings before membership or lookup operations."
+  - "Invalid fixture paths, including NUL-bearing strings and resolve failures, map to invalid-fixture-path."
 
 patterns-established:
   - "Pair-aware evidence normalization: project event-specific approved facts before computing compatibility tuples."
   - "Closed diagnostics: never interpolate editor-controlled fixture, source, range, or case values into provenance errors."
+  - "Total parser boundaries: catch decoder-wide ValueError plus RecursionError, then classify outside the active handler."
+  - "Validate-before-hash: reject non-string JSON members before set construction or dictionary lookup."
 
 requirements-completed: [TOOL-02, TOOL-03, TOOL-04, TERM-02, TERM-03, TERM-04, TERM-05]
 
@@ -58,7 +68,7 @@ coverage:
         status: pass
     human_judgment: false
   - id: D3
-    description: "Fixture, source, range, terminal-case, and recursive JSON canaries are absent from exceptions, traceback state, and CLI stderr."
+    description: "Fixture, source, range, terminal-case, recursive/oversized JSON, malformed matrix, and invalid-path inputs remain closed across exceptions, traceback state, and CLI stderr."
     requirement: TOOL-04
     verification:
       - kind: unit
@@ -73,9 +83,15 @@ coverage:
       - kind: unit
         ref: "tests/test_phase2_provenance.py#recursive JSON direct and CLI boundary tests"
         status: pass
+      - kind: unit
+        ref: "tests/test_phase2_provenance.py#oversized JSON, malformed matrix, and NUL path direct and CLI tests"
+        status: pass
+      - kind: integration
+        ref: "tests/test_sse.py and tests/test_transport.py#oversized integer protocol taxonomy and cleanup"
+        status: pass
     human_judgment: false
 
-duration: 30min
+duration: 54min
 completed: 2026-07-17
 status: complete
 ---
@@ -86,18 +102,19 @@ status: complete
 
 ## Performance
 
-- **Duration:** 30 min
+- **Duration:** 54 min
 - **Started:** 2026-07-17T00:32:49Z
-- **Completed:** 2026-07-17T01:02:06Z
+- **Completed:** 2026-07-17T01:26:53Z
 - **Tasks:** 1 TDD feature
-- **Files modified:** 2
+- **Files modified:** 5
 
 ## Accomplishments
 
 - Reused the production pair-preserving JSON hook and event-specific tool/chat projectors so all same-value and conflicting approved duplicates reject without globally rejecting ignored additive data.
 - Enforced the exact `_EXPECTED_KINDS` mapping for all five lifecycle paths in the release-agnostic canonical/newer normalization path.
 - Replaced value-bearing verifier failures with finite constant codes and translated JSON, Unicode, filesystem, and Git failures without retained cause or context.
-- Added 37 network-free adversarial cases over complete temporary release roots and real temporary Git source trees, including direct and real-CLI recursive JSON failures.
+- Classified Python's oversized-integer JSON `ValueError` as malformed protocol data in both direct and HTTP client streaming paths, preserving cleanup and non-retryable taxonomy.
+- Added 54 network-free adversarial provenance cases over complete temporary release roots and real temporary Git source trees, plus direct/streaming public SSE regressions.
 
 ## Task Commits
 
@@ -105,19 +122,26 @@ status: complete
 2. **GREEN: Close provenance trust boundaries** - `22c5744` (feat)
 3. **Post-review RED: Cover recursive provenance JSON failures** - `d389cdf` (test)
 4. **Post-review GREEN: Close recursive JSON error boundary** - `fe8d99a` (fix)
+5. **Post-review RED: Expose malformed JSON boundary escapes** - `ff9f57b` (test)
+6. **Post-review GREEN: Close malformed JSON input boundaries** - `aeab137` (fix)
 
 No separate refactor commit was needed; the GREEN implementation already centralizes fixture reading, pair decoding, event-specific projection, and closed translation.
 
 ## Files Created/Modified
 
 - `scripts/check_phase2_provenance.py` - Production-faithful lifecycle projection, exact evidence roles, and closed diagnostics.
-- `tests/test_phase2_provenance.py` - Duplicate-family, additive-control, evidence-role, exception-state, traceback, and CLI regressions.
+- `src/hermes_agent_api_client/sse.py` - Decoder-wide malformed JSON classification as protocol failure.
+- `tests/test_phase2_provenance.py` - Duplicate-family, additive-control, evidence-role, malformed-input, exception-state, traceback, and CLI regressions.
+- `tests/test_sse.py` - Direct oversized-integer protocol taxonomy and cleanup regression.
+- `tests/test_transport.py` - HTTP streaming oversized-integer taxonomy, secrecy, and response cleanup regression.
 
 ## Decisions Made
 
 - Reused intentional package-private production projectors with narrow static-analysis suppressions instead of copying approved member lists into the verifier.
 - Consumed only sanitized approved Hermes terminal metadata during normalization; additive raw fields remain outside compatibility state.
 - Preserved `latest-tag-verification-blocked` as the sole exit-3 diagnostic; every other provenance failure remains exit 1.
+- Reused existing finite matrix codes for malformed reference and finish-reason values rather than expanding diagnostic vocabulary.
+- Used `invalid-fixture-path` for invalid path scalars/resolution failures while preserving `fixture-path-escape` for successfully resolved escapes.
 
 ## Deviations from Plan
 
@@ -132,10 +156,46 @@ No separate refactor commit was needed; the GREEN implementation already central
 - **Verification:** 51 focused tests, both live scopes, and the 601-test 100%-coverage suite pass; recursive CLI failures emit exactly one closed line.
 - **Committed in:** `d389cdf` (RED), `fe8d99a` (GREEN)
 
+**2. [Rule 1 - Bug] Classified oversized JSON integers as protocol failures**
+
+- **Found during:** Deep post-execution code review CR-01
+- **Issue:** Python raises plain `ValueError` for a valid 5,000-digit JSON integer; the public SSE decoder translated it to retryable `HermesTransportError`.
+- **Fix:** Caught decoder-wide `ValueError` in `_load_json_safely` and added direct plus HTTP streaming regressions for exact `HermesProtocolError`, closed exception state, and response/source cleanup.
+- **Files modified:** `src/hermes_agent_api_client/sse.py`, `tests/test_sse.py`, `tests/test_transport.py`
+- **Verification:** Both new public regressions and the complete 373-test affected-file suite pass.
+- **Committed in:** `ff9f57b` (RED), `aeab137` (GREEN)
+
+**3. [Rule 1 - Bug / Rule 2 - Missing Critical] Closed plain ValueError at both provenance JSON boundaries**
+
+- **Found during:** Deep post-execution code review CR-02
+- **Issue:** Oversized integers escaped `_json_pairs`, `_load_object`, and real CLI lifecycle/provenance/design-matrix paths as raw multiline tracebacks.
+- **Fix:** Classified `ValueError` outside active handlers as `invalid-sse-json` or `invalid-provenance-json` and covered all three evidence inputs directly and through `main()`.
+- **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
+- **Verification:** Exact one-line stderr, no traceback/canary, and no cause/context pass for every boundary.
+- **Committed in:** `ff9f57b` (RED), `aeab137` (GREEN)
+
+**4. [Rule 1 - Bug / Rule 2 - Missing Critical] Validated design-matrix values before hashing**
+
+- **Found during:** Deep post-execution code review CR-03
+- **Issue:** List/dict values at root citations, case citations, or `finish_reason` reached set/lookup operations and raised raw `TypeError`.
+- **Fix:** Required lists of exact built-in strings before set operations and an exact built-in string before finish-reason lookup, preserving the existing finite codes.
+- **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
+- **Verification:** Six list/dict variants pass both direct and real-CLI closed-code assertions.
+- **Committed in:** `ff9f57b` (RED), `aeab137` (GREEN)
+
+**5. [Rule 1 - Bug / Rule 2 - Missing Critical] Closed invalid fixture-path resolution**
+
+- **Found during:** Deep post-execution code review CR-04
+- **Issue:** A valid JSON string containing NUL reached `Path.resolve()` and escaped as raw `ValueError` with an editor-controlled path.
+- **Fix:** Rejected NUL before resolution and translated `OSError`, `RuntimeError`, and `ValueError` from resolution outside the active handler to `invalid-fixture-path`.
+- **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
+- **Verification:** Manifest-level direct and real-CLI tests prove exact code, single-line stderr, and no canary/cause/context.
+- **Committed in:** `ff9f57b` (RED), `aeab137` (GREEN)
+
 ---
 
-**Total deviations:** 1 auto-fixed review-discovered correctness/security boundary issue (Rule 1 / Rule 2).
-**Impact on plan:** The fix completes the already-promised closed diagnostic boundary without expanding public API, fixture, dependency, or distribution scope.
+**Total deviations:** 5 auto-fixed review-discovered correctness/security boundary issues (Rule 1 / Rule 2).
+**Impact on plan:** The fixes complete the already-promised malformed-input and closed-diagnostic boundary without expanding public API exports, fixtures, dependencies, lock state, or distribution scope. The only public source change is the authorized SSE parser classification fix.
 
 ## Issues Encountered
 
@@ -146,18 +206,21 @@ No separate refactor commit was needed; the GREEN implementation already central
 
 - RED commit `0d421a9` precedes GREEN commit `22c5744`.
 - Post-review RED commit `d389cdf` precedes post-review GREEN fix `fe8d99a`.
+- Malformed-input RED commit `ff9f57b` precedes GREEN fix `aeab137`.
 - RED failed on approved duplicate acceptance, evidence-role forgery, and value-bearing/context-retaining diagnostics while the additive duplicate control passed.
-- The continuation RED proved raw direct and CLI `RecursionError` failures; GREEN passes all 51 focused tests. No behavior-preserving refactor commit was necessary.
+- The first continuation RED proved raw direct and CLI `RecursionError` failures.
+- The second continuation RED proved 15 wrong-taxonomy or raw `ValueError`/`TypeError` failures; GREEN passes all 64 provenance tests and all 373 tests in the affected files. No behavior-preserving refactor commit was necessary.
 
 ## Verification Results
 
-- Focused provenance matrix - 51 passed.
+- Focused provenance matrix - 64 passed.
+- Complete affected-file suite (`test_sse.py`, `test_transport.py`, `test_phase2_provenance.py`) - 373 passed.
 - Live `release-and-tool` and `terminal` provenance scopes - passed against the official tag gate.
-- `uv run --no-sync pytest -q` - 601 passed with 100% statement and branch coverage.
+- `uv run --no-sync pytest -q` - 616 passed with 100% statement and branch coverage.
 - Ruff format/check and full basedpyright - passed.
 - `basedpyright --verifytypes hermes_agent_api_client --ignoreexternal` - 100% type completeness.
-- Isolated wheel/sdist build and `scripts/verify_dist.py` - passed.
-- Public package source, immutable fixtures, `pyproject.toml`, and `uv.lock` - unchanged.
+- Fresh wheel/sdist build in an isolated temporary output directory and `scripts/verify_dist.py` - passed.
+- Public API exports, immutable fixtures, `pyproject.toml`, and `uv.lock` - unchanged; `sse.py` changed only to close the authorized parser taxonomy defect.
 
 ## User Setup Required
 
@@ -165,16 +228,16 @@ None - no external service configuration required.
 
 ## Next Phase Readiness
 
-- All three Phase 2 verifier/review gaps now have permanent adversarial regressions and production-faithful fixes.
+- All Phase 2 verifier/review gaps now have permanent adversarial regressions and production-faithful fixes.
 - Phase 2 is ready for re-verification and milestone progression into Phase 3.
 - Phase 4 retains dependency currency and installed-distribution closure ownership.
 
 ## Self-Check: PASSED
 
-- Both planned implementation/test files exist and contain no stub markers.
-- Original RED/GREEN `0d421a9` → `22c5744` and review-continuation RED/GREEN `d389cdf` → `fe8d99a` exist in the required order.
+- All five modified implementation/test files exist and contain no stub markers.
+- Original RED/GREEN `0d421a9` → `22c5744`, recursion continuation `d389cdf` → `fe8d99a`, and malformed-input continuation `ff9f57b` → `aeab137` exist in the required order.
 - Focused, live, full-coverage, lint, typing, build, and distribution gates pass.
-- No public source, fixture, dependency declaration, lockfile, new endpoint, or new external trust surface changed.
+- No public API export, fixture, dependency declaration, lockfile, new endpoint, or new external trust surface changed.
 
 ---
 *Phase: 02-conversation-event-contract*
