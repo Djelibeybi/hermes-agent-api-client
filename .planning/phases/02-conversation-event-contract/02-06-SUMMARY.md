@@ -10,7 +10,7 @@ requires:
 provides:
   - production-faithful pair-preserving lifecycle normalization for provenance compatibility
   - exact release-agnostic evidence-role enforcement for every required lifecycle fixture
-  - closed context-free provenance errors and single-line CLI diagnostics
+  - closed context-free provenance errors, including recursive JSON decoder failures, and single-line CLI diagnostics
 affects: [phase-2-verification, phase-4-contract-verification]
 
 tech-stack:
@@ -29,6 +29,7 @@ key-decisions:
   - "Lifecycle compatibility uses the production pair hook plus tool/chat projectors, so approved duplicates reject while ignored additive duplicates remain compatible."
   - "Every required lifecycle path must match its exact _EXPECTED_KINDS role before any fixture bytes are normalized."
   - "Provenance failures expose one finite constant code and translate lower-level exceptions only after leaving the active handler."
+  - "RecursionError is classified at both JSON entry points as the existing boundary-specific closed parse code."
 
 patterns-established:
   - "Pair-aware evidence normalization: project event-specific approved facts before computing compatibility tuples."
@@ -57,7 +58,7 @@ coverage:
         status: pass
     human_judgment: false
   - id: D3
-    description: "Fixture, source, range, and terminal-case canaries are absent from exceptions, traceback state, and CLI stderr."
+    description: "Fixture, source, range, terminal-case, and recursive JSON canaries are absent from exceptions, traceback state, and CLI stderr."
     requirement: TOOL-04
     verification:
       - kind: unit
@@ -69,9 +70,12 @@ coverage:
       - kind: integration
         ref: "uv run --no-sync python scripts/check_phase2_provenance.py --scope terminal"
         status: pass
+      - kind: unit
+        ref: "tests/test_phase2_provenance.py#recursive JSON direct and CLI boundary tests"
+        status: pass
     human_judgment: false
 
-duration: 12min
+duration: 30min
 completed: 2026-07-17
 status: complete
 ---
@@ -82,9 +86,9 @@ status: complete
 
 ## Performance
 
-- **Duration:** 12 min
+- **Duration:** 30 min
 - **Started:** 2026-07-17T00:32:49Z
-- **Completed:** 2026-07-17T00:44:31Z
+- **Completed:** 2026-07-17T01:02:06Z
 - **Tasks:** 1 TDD feature
 - **Files modified:** 2
 
@@ -93,12 +97,14 @@ status: complete
 - Reused the production pair-preserving JSON hook and event-specific tool/chat projectors so all same-value and conflicting approved duplicates reject without globally rejecting ignored additive data.
 - Enforced the exact `_EXPECTED_KINDS` mapping for all five lifecycle paths in the release-agnostic canonical/newer normalization path.
 - Replaced value-bearing verifier failures with finite constant codes and translated JSON, Unicode, filesystem, and Git failures without retained cause or context.
-- Added 33 network-free adversarial cases over complete temporary release roots and real temporary Git source trees.
+- Added 37 network-free adversarial cases over complete temporary release roots and real temporary Git source trees, including direct and real-CLI recursive JSON failures.
 
 ## Task Commits
 
 1. **RED: Expose provenance boundary gaps** - `0d421a9` (test)
 2. **GREEN: Close provenance trust boundaries** - `22c5744` (feat)
+3. **Post-review RED: Cover recursive provenance JSON failures** - `d389cdf` (test)
+4. **Post-review GREEN: Close recursive JSON error boundary** - `fe8d99a` (fix)
 
 No separate refactor commit was needed; the GREEN implementation already centralizes fixture reading, pair decoding, event-specific projection, and closed translation.
 
@@ -115,7 +121,21 @@ No separate refactor commit was needed; the GREEN implementation already central
 
 ## Deviations from Plan
 
-None - plan executed exactly as written.
+### Auto-fixed Issues
+
+**1. [Rule 1 - Bug / Rule 2 - Missing Critical] Closed recursive JSON decoder failures discovered by deep post-execution review**
+
+- **Found during:** Deep post-execution code review CR-01
+- **Issue:** Valid deeply nested lifecycle or object-file JSON raised raw `RecursionError`; `main()` propagated a traceback instead of the closed provenance code promised by the plan.
+- **Fix:** Added direct and real-CLI RED regressions for both JSON entry points, then translated `RecursionError` through the existing outside-active-handler classification pattern.
+- **Files modified:** `scripts/check_phase2_provenance.py`, `tests/test_phase2_provenance.py`
+- **Verification:** 51 focused tests, both live scopes, and the 601-test 100%-coverage suite pass; recursive CLI failures emit exactly one closed line.
+- **Committed in:** `d389cdf` (RED), `fe8d99a` (GREEN)
+
+---
+
+**Total deviations:** 1 auto-fixed review-discovered correctness/security boundary issue (Rule 1 / Rule 2).
+**Impact on plan:** The fix completes the already-promised closed diagnostic boundary without expanding public API, fixture, dependency, or distribution scope.
 
 ## Issues Encountered
 
@@ -125,14 +145,15 @@ None - plan executed exactly as written.
 ## TDD Gate Compliance
 
 - RED commit `0d421a9` precedes GREEN commit `22c5744`.
+- Post-review RED commit `d389cdf` precedes post-review GREEN fix `fe8d99a`.
 - RED failed on approved duplicate acceptance, evidence-role forgery, and value-bearing/context-retaining diagnostics while the additive duplicate control passed.
-- GREEN passes all 47 focused tests. No behavior-preserving refactor commit was necessary.
+- The continuation RED proved raw direct and CLI `RecursionError` failures; GREEN passes all 51 focused tests. No behavior-preserving refactor commit was necessary.
 
 ## Verification Results
 
-- Focused provenance matrix - 47 passed across bounded invocations.
+- Focused provenance matrix - 51 passed.
 - Live `release-and-tool` and `terminal` provenance scopes - passed against the official tag gate.
-- `uv run --no-sync pytest -q` - 597 passed with 100% statement and branch coverage.
+- `uv run --no-sync pytest -q` - 601 passed with 100% statement and branch coverage.
 - Ruff format/check and full basedpyright - passed.
 - `basedpyright --verifytypes hermes_agent_api_client --ignoreexternal` - 100% type completeness.
 - Isolated wheel/sdist build and `scripts/verify_dist.py` - passed.
@@ -151,7 +172,7 @@ None - no external service configuration required.
 ## Self-Check: PASSED
 
 - Both planned implementation/test files exist and contain no stub markers.
-- RED `0d421a9` and GREEN `22c5744` exist in the required order.
+- Original RED/GREEN `0d421a9` → `22c5744` and review-continuation RED/GREEN `d389cdf` → `fe8d99a` exist in the required order.
 - Focused, live, full-coverage, lint, typing, build, and distribution gates pass.
 - No public source, fixture, dependency declaration, lockfile, new endpoint, or new external trust surface changed.
 
