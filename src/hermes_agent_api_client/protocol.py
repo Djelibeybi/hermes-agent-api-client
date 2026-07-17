@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, ClassVar, Literal, Never, cast
@@ -16,7 +16,11 @@ from pydantic import (
     field_validator,
 )
 
-from .models import FailureCategory, HermesCapabilities
+from .models import (
+    FailureCategory,
+    HermesCapabilities,
+    _require_lifecycle_text,  # pyright: ignore[reportPrivateUsage]
+)
 
 
 def _validate_error_metadata(
@@ -111,6 +115,232 @@ class _CapabilityFailureKind(StrEnum):
     IDENTITY = "identity"
     CAPABILITY = "capability"
     PROTOCOL = "protocol"
+
+
+_MISSING_JSON_MEMBER = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _JsonObjectPairs:
+    """One JSON object whose ordered members retain duplicate-name evidence."""
+
+    pairs: tuple[tuple[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _TerminalMetadata:
+    """Sanitized root-Hermes lifecycle facts with explicit presence state."""
+
+    root_present: bool
+    completed: object = _MISSING_JSON_MEMBER
+    failed: object = _MISSING_JSON_MEMBER
+    partial: object = _MISSING_JSON_MEMBER
+    error_code: object = _MISSING_JSON_MEMBER
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectedChatChunk:
+    """Materialized chat data paired with sanitized terminal metadata."""
+
+    document: dict[str, object]
+    terminal_metadata: _TerminalMetadata
+
+
+def _json_object_pairs_hook(  # pyright: ignore[reportUnusedFunction]
+    pairs: list[tuple[str, object]],
+) -> _JsonObjectPairs:
+    """Keep one decoded JSON object distinct from arrays and ordinary mappings."""
+    return _JsonObjectPairs(tuple(pairs))
+
+
+class _DuplicateJsonMemberError(Exception):
+    """One materialized JSON object carried the same member name twice."""
+
+
+type _JsonProjector = Callable[[object], object]
+
+
+def _materialize_json_value(value: object) -> object:
+    """Recursively convert private pair nodes into ordinary JSON containers."""
+    if isinstance(value, _JsonObjectPairs):
+        materialized: dict[str, object] = {}
+        for key, member_value in value.pairs:
+            if key in materialized:
+                raise _DuplicateJsonMemberError
+            materialized[key] = _materialize_json_value(member_value)
+        return materialized
+    if isinstance(value, list):
+        items = cast("list[object]", value)
+        return [_materialize_json_value(item) for item in items]
+    return value
+
+
+def _has_duplicate_member(value: _JsonObjectPairs, member_name: str) -> bool:
+    """Report whether one exact object member occurs more than once."""
+    found = False
+    for name, _ in value.pairs:
+        if name != member_name:
+            continue
+        if found:
+            return True
+        found = True
+    return False
+
+
+def _last_member_value(value: _JsonObjectPairs, member_name: str) -> object:
+    """Return the last value for an additive-compatible object member."""
+    result: object = _MISSING_JSON_MEMBER
+    for name, member_value in value.pairs:
+        if name == member_name:
+            result = member_value
+    return result
+
+
+_TOOL_PROGRESS_MEMBERS = frozenset(("toolCallId", "tool", "status"))
+_CHAT_CHUNK_MEMBERS = frozenset(("choices", "usage"))
+_CHOICE_MEMBERS = frozenset(("delta", "finish_reason"))
+_DELTA_MEMBERS = frozenset(("role", "content"))
+_USAGE_MEMBERS = frozenset(("prompt_tokens", "completion_tokens", "total_tokens"))
+_TERMINAL_METADATA_MEMBERS = frozenset(("completed", "failed", "partial", "error_code"))
+
+_PROJECTION_FAILURE = object()
+
+
+def _materialize_member(value: object) -> object:
+    """Materialize one approved leaf or report an input-free projection failure."""
+    try:
+        return _materialize_json_value(value)
+    except (RecursionError, _DuplicateJsonMemberError):
+        return _PROJECTION_FAILURE
+
+
+def _project_approved_members(
+    value: _JsonObjectPairs,
+    approved: frozenset[str],
+    nested: Mapping[str, _JsonProjector] | None = None,
+) -> object:
+    """Project unique approved members and discard every additive member.
+
+    Duplicate names are refused only on approved paths: a repeated name inside
+    additive data the wire models ignore never reaches this projection at all.
+    """
+    projected: dict[str, object] = {}
+    for name, member_value in value.pairs:
+        if name not in approved:
+            continue
+        if name in projected:
+            return _PROJECTION_FAILURE
+        project = None if nested is None else nested.get(name)
+        member = (
+            _materialize_member(member_value)
+            if project is None
+            else project(member_value)
+        )
+        if member is _PROJECTION_FAILURE:
+            return _PROJECTION_FAILURE
+        projected[name] = member
+    return projected
+
+
+def _project_nested_object(value: object, approved: frozenset[str]) -> object:
+    """Project one approved sub-object, leaving other shapes to the wire model."""
+    if not isinstance(value, _JsonObjectPairs):
+        return _materialize_member(value)
+    return _project_approved_members(value, approved)
+
+
+def _project_choice_element(value: object) -> object:
+    """Project one approved choices element and its approved delta."""
+    if not isinstance(value, _JsonObjectPairs):
+        return _materialize_member(value)
+    return _project_approved_members(
+        value,
+        _CHOICE_MEMBERS,
+        {"delta": lambda member: _project_nested_object(member, _DELTA_MEMBERS)},
+    )
+
+
+def _project_choices_member(value: object) -> object:
+    """Project the approved choices array element-wise."""
+    if not isinstance(value, list):
+        return _materialize_member(value)
+    projected: list[object] = []
+    for item in cast("list[object]", value):
+        element = _project_choice_element(item)
+        if element is _PROJECTION_FAILURE:
+            return _PROJECTION_FAILURE
+        projected.append(element)
+    return projected
+
+
+_CHAT_CHUNK_NESTED: Mapping[str, _JsonProjector] = {
+    "choices": _project_choices_member,
+    "usage": lambda value: _project_nested_object(value, _USAGE_MEMBERS),
+}
+
+
+def _project_terminal_metadata(value: object) -> _TerminalMetadata | None:
+    """Validate and retain only approved root-Hermes lifecycle facts."""
+    if value is _MISSING_JSON_MEMBER:
+        return _TerminalMetadata(root_present=False)
+    if not isinstance(value, _JsonObjectPairs):
+        return None
+
+    projected: dict[str, object] = {}
+    for name, member_value in value.pairs:
+        if name not in _TERMINAL_METADATA_MEMBERS:
+            continue
+        if name in projected:
+            return None
+        if name == "error_code":
+            try:
+                projected[name] = _require_lifecycle_text(member_value)
+            except ValueError:
+                return None
+        else:
+            if type(member_value) is not bool:
+                return None
+            projected[name] = member_value
+    return _TerminalMetadata(root_present=True, **projected)
+
+
+def _project_tool_progress_object(  # pyright: ignore[reportUnusedFunction]
+    value: object,
+) -> dict[str, object] | None:
+    """Project unique approved progress members and discard all additive data."""
+    if not isinstance(value, _JsonObjectPairs):
+        return None
+
+    projected = _project_approved_members(value, _TOOL_PROGRESS_MEMBERS)
+    if projected is _PROJECTION_FAILURE:
+        return None
+    return cast("dict[str, object]", projected)
+
+
+def _project_chat_chunk_object(  # pyright: ignore[reportUnusedFunction]
+    value: object,
+) -> _ProjectedChatChunk | None:
+    """Project terminal facts and the unique approved chat members."""
+    if not isinstance(value, _JsonObjectPairs):
+        return None
+    if _has_duplicate_member(value, "hermes"):
+        return None
+
+    terminal_metadata = _project_terminal_metadata(_last_member_value(value, "hermes"))
+    if terminal_metadata is None:
+        return None
+
+    projected = _project_approved_members(
+        value,
+        _CHAT_CHUNK_MEMBERS,
+        _CHAT_CHUNK_NESTED,
+    )
+    if projected is _PROJECTION_FAILURE:
+        return None
+    return _ProjectedChatChunk(
+        document=cast("dict[str, object]", projected),
+        terminal_metadata=terminal_metadata,
+    )
 
 
 def _raise_capability_failure(kind: _CapabilityFailureKind) -> Never:
@@ -225,13 +455,18 @@ class _CapabilitiesWire(_WireModel):
         return value
 
 
-type _NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
 type _NonNegativeInteger = Annotated[int, Field(ge=0)]
 
 
 class _ToolProgressWire(_WireModel):
-    tool: _NonEmptyString
-    status: _NonEmptyString
+    tool_call_id: str = Field(alias="toolCallId")
+    tool: str
+    status: Literal["running", "completed"]
+
+    @field_validator("tool_call_id", "tool", mode="before")
+    @classmethod
+    def _require_exact_lifecycle_text(cls, value: object) -> str:
+        return _require_lifecycle_text(value)
 
 
 class _DeltaWire(_WireModel):

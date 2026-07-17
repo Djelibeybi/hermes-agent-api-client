@@ -30,6 +30,7 @@ from hermes_agent_api_client.models import (
     HermesEvent,
     KeepaliveEvent,
     TerminalEvent,
+    TerminalFailureReason,
     TerminalOutcome,
 )
 from hermes_agent_api_client.protocol import (
@@ -195,6 +196,27 @@ def _successful_sse(text: str = "hello") -> bytes:
         separators=(",", ":"),
     ).encode()
     return b"data: " + chunk + b"\n\ndata: [DONE]\n\n"
+
+
+def _length_sse(text: str = "hello") -> bytes:
+    """Build text followed by one enriched length terminal and DONE."""
+    content = json.dumps(
+        {"choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]},
+        separators=(",", ":"),
+    ).encode()
+    terminal = json.dumps(
+        {
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "length"}],
+            "hermes": {
+                "completed": False,
+                "failed": False,
+                "partial": True,
+                "error_code": "output_truncated",
+            },
+        },
+        separators=(",", ":"),
+    ).encode()
+    return b"data: " + content + b"\n\ndata: " + terminal + b"\n\ndata: [DONE]\n\n"
 
 
 async def _probe(
@@ -389,6 +411,26 @@ async def test_probe_propagates_typed_capability_failures_safely(
             canaries=(canary, "capability-bearer"),
             forbidden_objects=(response, document),
         )
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_probe_rejects_an_oversized_capability_integer_permanently() -> None:
+    """An unparseable integer is malformed input, never a transient condition."""
+    body = b'{"model":"hermes-4", "context_window":' + b"9" * 5000 + b"}"
+    assert len(body) < _MAX_CAPABILITIES_BYTES
+    stream = TrackingAsyncByteStream((body,))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, stream=stream)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        with pytest.raises(HermesProtocolError) as caught:
+            await _probe(client)
+        assert not isinstance(caught.value, HermesTransportError)
+        assert caught.value.retryable is False
     finally:
         await client.aclose()
 
@@ -905,7 +947,7 @@ async def test_stream_timeout_survives_one_virtual_keepalive_interval() -> None:
 @pytest.mark.asyncio
 async def test_terminal_is_delivered_only_after_response_cleanup() -> None:
     """Terminal delivery proves the response scope has already closed."""
-    stream = TrackingAsyncByteStream((_successful_sse("ordered text"),))
+    stream = TrackingAsyncByteStream((_length_sse("ordered text"),))
     response: httpx.Response | None = None
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -926,7 +968,11 @@ async def test_terminal_is_delivered_only_after_response_cleanup() -> None:
     try:
         assert await anext(generator) == AssistantDeltaEvent(text="ordered text")
         assert stream.closed is False
-        assert await anext(generator) == TerminalEvent(outcome=TerminalOutcome.SUCCESS)
+        assert await anext(generator) == TerminalEvent(
+            outcome=TerminalOutcome.LENGTH,
+            partial=True,
+            failure_reason=TerminalFailureReason.OUTPUT_TRUNCATED,
+        )
         assert stream.closed is True
         assert response is not None
         assert response.is_closed is True
@@ -1307,6 +1353,45 @@ async def test_streaming_failures_close_response(
         assert response is not None
         assert response.is_closed is True
         assert client.is_closed is False
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_streaming_oversized_json_integer_is_a_protocol_failure() -> None:
+    """A decoder integer limit remains protocol data and closes its response."""
+    canary = "stream-oversized-integer-canary"
+    payload = (
+        b'data: {"choices":[],"' + canary.encode() + b'":' + b"9" * 5_000 + b"}\n\n"
+    )
+    stream = TrackingAsyncByteStream((payload,))
+    response: httpx.Response | None = None
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal response
+        response = httpx.Response(200, request=request, stream=stream)
+        return response
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        with pytest.raises(HermesProtocolError) as caught:
+            await _collect_stream(client)
+
+        assert type(caught.value) is HermesProtocolError
+        assert not isinstance(caught.value, HermesTransportError)
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        assert canary not in str(caught.value)
+        assert canary not in repr(caught.value)
+        assert stream.closed is True
+        assert response is not None
+        assert response.is_closed is True
+        assert client.is_closed is False
+        _assert_traceback_locals_are_safe(
+            caught.value,
+            canaries=(canary,),
+            forbidden_objects=(payload, stream, response),
+        )
     finally:
         await client.aclose()
 

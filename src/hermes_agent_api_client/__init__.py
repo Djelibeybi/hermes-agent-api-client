@@ -9,8 +9,10 @@ from .models import (
     HermesEvent,
     KeepaliveEvent,
     TerminalEvent,
+    TerminalFailureReason,
     TerminalOutcome,
     ToolProgressEvent,
+    ToolProgressStatus,
     UsageEvent,
 )
 from .protocol import (
@@ -39,8 +41,10 @@ __all__ = [
     "HermesTransportError",
     "KeepaliveEvent",
     "TerminalEvent",
+    "TerminalFailureReason",
     "TerminalOutcome",
     "ToolProgressEvent",
+    "ToolProgressStatus",
     "UsageEvent",
     "__version__",
 ]

@@ -5,31 +5,55 @@ from __future__ import annotations
 import asyncio
 import json
 import traceback
-from typing import TYPE_CHECKING, Any, cast
+from itertools import product
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import pytest
 
+import hermes_agent_api_client as hermes_api
 from hermes_agent_api_client import (
     AssistantDeltaEvent,
     HermesProtocolError,
     HermesTransportError,
     KeepaliveEvent,
     TerminalEvent,
+    TerminalFailureReason,
     TerminalOutcome,
     ToolProgressEvent,
+    ToolProgressStatus,
     UsageEvent,
+)
+from hermes_agent_api_client.protocol import (
+    _json_object_pairs_hook,  # pyright: ignore[reportPrivateUsage]
+    _project_chat_chunk_object,  # pyright: ignore[reportPrivateUsage]
 )
 from hermes_agent_api_client.sse import (
     MAX_EVENT_DATA_CHARS,
     MAX_PENDING_BYTES,
     async_decode_hermes_sse,
 )
-from tests.helpers.hermes import load_golden_bytes, partition_bytes
+from tests.helpers.hermes import (
+    load_golden_bytes,
+    load_golden_json,
+    partition_bytes,
+    raw_json_object_sse_record,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Iterable
+    from types import FrameType
 
 _BOOLEAN_TOKEN_COUNT: object = True
+_OMITTED = object()
+
+
+class _HasAsyncGeneratorFrame(Protocol):
+    """Structural view of the CPython async-generator inspection surface."""
+
+    @property
+    def ag_frame(self) -> FrameType | None:
+        """Return the retained generator frame, if the generator is open."""
+        ...
 
 
 async def _chunks(parts: tuple[bytes, ...]) -> AsyncIterator[bytes]:
@@ -255,6 +279,85 @@ def _derived_usage_record(field: str, value: object) -> bytes:
             "usage": usage,
         }
     )
+
+
+def _terminal_record(
+    *,
+    finish_reason: object = _OMITTED,
+    hermes: object = _OMITTED,
+    extra: dict[str, object] | None = None,
+) -> bytes:
+    """Build one terminal candidate while preserving field omission."""
+    choice: dict[str, object] = {"delta": {"role": "assistant"}}
+    if finish_reason is not _OMITTED:
+        choice["finish_reason"] = finish_reason
+    document: dict[str, object] = {"choices": [choice]}
+    if hermes is not _OMITTED:
+        document["hermes"] = hermes
+    if extra is not None:
+        document.update(extra)
+    return _data_record(document)
+
+
+def _terminal_metadata(
+    *,
+    completed: object = _OMITTED,
+    failed: object = _OMITTED,
+    partial: object = _OMITTED,
+    error_code: object = _OMITTED,
+) -> dict[str, object]:
+    """Build lifecycle metadata while keeping absent distinct from null."""
+    values = {
+        "completed": completed,
+        "failed": failed,
+        "partial": partial,
+        "error_code": error_code,
+    }
+    return {name: value for name, value in values.items() if value is not _OMITTED}
+
+
+_ACCEPTED_STOP_METADATA = (
+    _OMITTED,
+    *(
+        _terminal_metadata(completed=completed, failed=failed, partial=partial)
+        for completed, failed, partial in product(
+            (_OMITTED, True),
+            (_OMITTED, False),
+            (_OMITTED, False),
+        )
+    ),
+)
+_ACCEPTED_LENGTH_METADATA = (
+    _OMITTED,
+    *(
+        _terminal_metadata(
+            completed=completed,
+            failed=failed,
+            partial=partial,
+            error_code=error_code,
+        )
+        for completed, failed, partial, error_code in product(
+            (_OMITTED, False),
+            (_OMITTED, False),
+            (_OMITTED, True),
+            (_OMITTED, "output_truncated"),
+        )
+    ),
+)
+_ACCEPTED_ERROR_METADATA = tuple(
+    _terminal_metadata(
+        completed=completed,
+        failed=failed,
+        partial=partial,
+        error_code=error_code,
+    )
+    for completed, failed, partial, error_code in product(
+        (_OMITTED, False),
+        (_OMITTED, True),
+        (False, True),
+        (_OMITTED, "agent_error", "future_safe_error"),
+    )
+)
 
 
 @pytest.mark.asyncio
@@ -489,9 +592,475 @@ async def test_tool_progress_record_is_isolated_metadata() -> None:
     """The canonical named progress event maps to the closed progress value."""
     records = _canonical_records()
     assert await _decode((records[2] + records[6],)) == (
-        ToolProgressEvent(tool_name="home_assistant", status="running"),
+        ToolProgressEvent(
+            tool_call_id="call-contract-001",
+            tool_name="home_assistant",
+            status=hermes_api.ToolProgressStatus.RUNNING,
+        ),
         TerminalEvent(outcome=TerminalOutcome.SUCCESS),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("toolCallId", "!"),
+        ("toolCallId", "~" * 256),
+        ("tool", "!"),
+        ("tool", "~" * 256),
+    ],
+)
+async def test_tool_progress_wire_text_matches_public_exact_bounds(
+    field: str,
+    value: str,
+) -> None:
+    """Wire identifiers share the exact public visible-ASCII contract."""
+    document = {
+        "toolCallId": "call-contract-001",
+        "tool": "home_assistant",
+        "status": "running",
+    }
+    document[field] = value
+
+    record = _data_record(document, event="hermes.tool.progress")
+    assert await _decode((record + _canonical_records()[6],)) == (
+        ToolProgressEvent(
+            tool_call_id=value if field == "toolCallId" else "call-contract-001",
+            tool_name=value if field == "tool" else "home_assistant",
+            status=hermes_api.ToolProgressStatus.RUNNING,
+        ),
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("toolCallId", ""),
+        ("toolCallId", "x" * 257),
+        ("toolCallId", "contains space"),
+        ("toolCallId", "line\nbreak"),
+        ("toolCallId", "café"),
+        ("toolCallId", 7),
+        ("toolCallId", True),
+        ("toolCallId", None),
+        ("tool", ""),
+        ("tool", "x" * 257),
+        ("tool", "contains space"),
+        ("tool", "\t"),
+        ("tool", "café"),
+        ("tool", 7),
+        ("tool", True),
+        ("tool", None),
+    ],
+)
+async def test_tool_progress_wire_rejects_non_contract_text(
+    field: str,
+    value: object,
+) -> None:
+    """Malformed wire lifecycle text fails as a safe protocol error."""
+    document: dict[str, object] = {
+        "toolCallId": "call-contract-001",
+        "tool": "home_assistant",
+        "status": "running",
+    }
+    document[field] = value
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((_data_record(document, event="hermes.tool.progress"),))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bytewise", [False, True], ids=["whole", "bytewise"])
+async def test_tool_progress_pair_fixture_preserves_exact_correlation_and_order(
+    bytewise: object,
+) -> None:
+    """The immutable pair remains running then completed with one exact ID."""
+    assert isinstance(bytewise, bool)
+    payload = load_golden_bytes("chat_completions/tool_progress_pair.sse")
+    parts = partition_bytes(payload) if bytewise else (payload,)
+
+    assert await _decode(parts) == (
+        ToolProgressEvent(
+            tool_call_id="call_terminal_1",
+            tool_name="terminal",
+            status=ToolProgressStatus.RUNNING,
+        ),
+        ToolProgressEvent(
+            tool_call_id="call_terminal_1",
+            tool_name="terminal",
+            status=ToolProgressStatus.COMPLETED,
+        ),
+        UsageEvent(input_tokens=1, output_tokens=1, total_tokens=2),
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_progress_preserves_punctuation_case_repeats_and_interleaving() -> (
+    None
+):
+    """Accepted lifecycle facts are neither normalized, deduplicated, nor reordered."""
+    records = tuple(
+        _data_record(
+            {"toolCallId": call_id, "tool": tool, "status": status},
+            event="hermes.tool.progress",
+        )
+        for call_id, tool, status in (
+            ("Call/A?=1", "Tool.Name+CASE", "running"),
+            ("other", "second", "running"),
+            ("Call/A?=1", "Tool.Name+CASE", "running"),
+            ("other", "second", "completed"),
+        )
+    )
+
+    prefix = await _decode_prefix_before_failure(
+        (*records, b"data: {interruption-canary}\n\n")
+    )
+
+    assert prefix == (
+        ToolProgressEvent(
+            tool_call_id="Call/A?=1",
+            tool_name="Tool.Name+CASE",
+            status=ToolProgressStatus.RUNNING,
+        ),
+        ToolProgressEvent(
+            tool_call_id="other",
+            tool_name="second",
+            status=ToolProgressStatus.RUNNING,
+        ),
+        ToolProgressEvent(
+            tool_call_id="Call/A?=1",
+            tool_name="Tool.Name+CASE",
+            status=ToolProgressStatus.RUNNING,
+        ),
+        ToolProgressEvent(
+            tool_call_id="other",
+            tool_name="second",
+            status=ToolProgressStatus.COMPLETED,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["toolCallId", "tool", "status"])
+@pytest.mark.parametrize("conflicting", [False, True], ids=["same", "conflicting"])
+async def test_duplicate_approved_tool_members_fail_before_dictionary_collapse(
+    field: str,
+    conflicting: object,
+) -> None:
+    """Every repeated approved singleton fails, even when both values agree."""
+    assert isinstance(conflicting, bool)
+    values = {
+        "toolCallId": '"call-contract-001"',
+        "tool": '"home_assistant"',
+        "status": '"running"',
+    }
+    duplicate = values[field]
+    if conflicting:
+        duplicate = {
+            "toolCallId": '"call-contract-002"',
+            "tool": '"other_tool"',
+            "status": '"completed"',
+        }[field]
+    members = (*values.items(), (field, duplicate))
+    record = raw_json_object_sse_record(
+        members,
+        event="hermes.tool.progress",
+    )
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((record + _canonical_records()[6],))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "root-hermes",
+        "choice-finish-reason",
+        "root-choices",
+        "root-usage",
+        "choice-delta",
+        "delta-content",
+    ],
+)
+@pytest.mark.parametrize("conflicting", [False, True], ids=["same", "conflicting"])
+async def test_duplicate_approved_chat_members_fail_before_materialization(
+    path: str,
+    conflicting: object,
+) -> None:
+    """Chat duplicate evidence is checked before nested pairs become mappings."""
+    assert isinstance(conflicting, bool)
+    canonical_choice = '[{"delta":{"content":"kept"},"finish_reason":null}]'
+    if path == "root-hermes":
+        duplicate = '{"partial":true}' if conflicting else '{"partial":false}'
+        members = (
+            ("choices", canonical_choice),
+            ("hermes", '{"partial":false}'),
+            ("hermes", duplicate),
+        )
+    elif path == "root-choices":
+        duplicate = (
+            '[{"delta":{"content":"smuggled"},"finish_reason":"stop"}]'
+            if conflicting
+            else canonical_choice
+        )
+        members = (("choices", canonical_choice), ("choices", duplicate))
+    elif path == "root-usage":
+        usage = '{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}'
+        duplicate = (
+            '{"prompt_tokens":9,"completion_tokens":9,"total_tokens":18}'
+            if conflicting
+            else usage
+        )
+        members = (
+            ("choices", canonical_choice),
+            ("usage", usage),
+            ("usage", duplicate),
+        )
+    elif path == "choice-delta":
+        duplicate = '{"content":"smuggled"}' if conflicting else '{"content":"kept"}'
+        members = (
+            (
+                "choices",
+                "["
+                '{"delta":{"content":"kept"},'
+                f'"delta":{duplicate},"finish_reason":null'
+                "}]",
+            ),
+        )
+    elif path == "delta-content":
+        duplicate = '"smuggled"' if conflicting else '"kept"'
+        members = (
+            (
+                "choices",
+                "["
+                f'{{"delta":{{"content":"kept","content":{duplicate}}},'
+                '"finish_reason":null}]',
+            ),
+        )
+    else:
+        duplicate = '"stop"' if conflicting else "null"
+        members = (
+            (
+                "choices",
+                "["
+                '{"delta":{"content":"kept"},'
+                f'"finish_reason":null,"finish_reason":{duplicate}'
+                "}]",
+            ),
+        )
+    record = raw_json_object_sse_record(members)
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((record + _canonical_records()[6],))
+
+
+@pytest.mark.asyncio
+async def test_duplicates_inside_ignored_additive_objects_remain_compatible() -> None:
+    """Duplicate spelling outside approved paths does not become an alias."""
+    progress = raw_json_object_sse_record(
+        (
+            ("toolCallId", '"call-contract-001"'),
+            ("tool", '"home_assistant"'),
+            ("status", '"running"'),
+            ("future", '{"status":"running","status":"completed"}'),
+        ),
+        event="hermes.tool.progress",
+    )
+
+    assert await _decode((progress + _canonical_records()[6],)) == (
+        ToolProgressEvent(
+            tool_call_id="call-contract-001",
+            tool_name="home_assistant",
+            status=ToolProgressStatus.RUNNING,
+        ),
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "members"),
+    [
+        (
+            "choice-additive",
+            (
+                (
+                    "choices",
+                    '[{"delta":{"content":"kept"},"finish_reason":null,'
+                    '"logprobs":{"a":1,"a":2}}]',
+                ),
+            ),
+        ),
+        (
+            "delta-additive",
+            (
+                (
+                    "choices",
+                    '[{"delta":{"content":"kept","future":{"a":1,"a":2}},'
+                    '"finish_reason":null}]',
+                ),
+            ),
+        ),
+        (
+            "usage-additive",
+            (
+                ("choices", '[{"delta":{"content":"kept"},"finish_reason":null}]'),
+                (
+                    "usage",
+                    '{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,'
+                    '"future":{"a":1,"a":2}}',
+                ),
+            ),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_chat_duplicates_under_approved_names_remain_compatible(
+    label: str,
+    members: tuple[tuple[str, str], ...],
+) -> None:
+    """A duplicate nested in ignored additive data is not an approved alias."""
+    del label
+    record = raw_json_object_sse_record(members)
+
+    events = await _decode((record + _canonical_records()[6],))
+
+    assert AssistantDeltaEvent(text="kept") in events
+    assert events[-1] == TerminalEvent(outcome=TerminalOutcome.SUCCESS)
+
+
+@pytest.mark.asyncio
+async def test_chat_projection_retains_only_approved_members() -> None:
+    """Only approved chat members reach the wire models, never raw error text."""
+    record = raw_json_object_sse_record(
+        (
+            ("choices", '[{"delta":{"content":"kept"},"finish_reason":null}]'),
+            ("error", '{"message":"projection-error-canary","type":"RuntimeError"}'),
+        ),
+    )
+    document = _record_document(record)
+    projected = _project_chat_chunk_object(
+        json.loads(json.dumps(document), object_pairs_hook=_json_object_pairs_hook),
+    )
+
+    assert projected is not None
+    assert set(projected.document) == {"choices"}
+    choices = cast("list[dict[str, Any]]", projected.document["choices"])
+    assert set(choices[0]) == {"delta", "finish_reason"}
+    assert set(cast("dict[str, Any]", choices[0]["delta"])) == {"content"}
+    assert "projection-error-canary" not in json.dumps(projected.document)
+
+
+@pytest.mark.parametrize(
+    ("label", "members"),
+    [
+        ("choices-not-a-list", (("choices", '{"delta":{},"finish_reason":null}'),)),
+        ("choice-not-an-object", (("choices", '["not-an-object"]'),)),
+        ("delta-not-an-object", (("choices", '[{"delta":"x","finish_reason":null}]'),)),
+        (
+            "usage-not-an-object",
+            (
+                ("choices", '[{"delta":{"content":"kept"},"finish_reason":null}]'),
+                ("usage", '"not-an-object"'),
+            ),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_malformed_approved_chat_shapes_are_rejected(
+    label: str,
+    members: tuple[tuple[str, str], ...],
+) -> None:
+    """Projection leaves non-conforming approved shapes for the wire models."""
+    del label
+    record = raw_json_object_sse_record(members)
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((record + _canonical_records()[6],))
+
+
+@pytest.mark.asyncio
+async def test_object_valued_approved_leaf_is_rejected() -> None:
+    """An approved scalar leaf carrying an object is materialized, then refused."""
+    progress = raw_json_object_sse_record(
+        (
+            ("toolCallId", '"call-contract-001"'),
+            ("tool", '"home_assistant"'),
+            ("status", '{"nested":"running"}'),
+        ),
+        event="hermes.tool.progress",
+    )
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((progress + _canonical_records()[6],))
+
+
+@pytest.mark.asyncio
+async def test_tool_progress_nested_duplicate_is_a_permanent_failure() -> None:
+    """A duplicate inside an approved tool member never becomes retryable."""
+    progress = raw_json_object_sse_record(
+        (
+            ("toolCallId", '"call-contract-001"'),
+            ("tool", '"home_assistant"'),
+            ("status", '{"a":1,"a":2}'),
+        ),
+        event="hermes.tool.progress",
+    )
+
+    with pytest.raises(HermesProtocolError) as failure:
+        await _decode((progress + _canonical_records()[6],))
+
+    assert failure.value.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_keepalive_after_the_framing_terminator_is_rejected() -> None:
+    """`[DONE]` bounds the stream: heartbeats may not extend it indefinitely."""
+    records = _canonical_records()
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((records[0], records[6], b": ping\n\n"))
+
+
+@pytest.mark.asyncio
+async def test_tool_raw_payloads_and_pair_tree_are_scrubbed_on_failure() -> None:
+    """Raw additive data and duplicate evidence never survive protocol failure."""
+    canaries = (
+        "tool-emoji-canary",
+        "tool-label-canary",
+        "tool-arguments-canary",
+        "tool-results-canary",
+        "tool-nested-canary",
+    )
+    record = raw_json_object_sse_record(
+        (
+            ("toolCallId", '"call-contract-001"'),
+            ("tool", '"home_assistant"'),
+            ("status", '"running"'),
+            ("status", '"completed"'),
+            ("emoji", f'"{canaries[0]}"'),
+            ("label", f'"{canaries[1]}"'),
+            ("arguments", f'{{"value":"{canaries[2]}"}}'),
+            ("results", f'["{canaries[3]}"]'),
+            ("raw", f'{{"nested":"{canaries[4]}"}}'),
+        ),
+        event="hermes.tool.progress",
+    )
+    stream = cast("AsyncGenerator[object]", async_decode_hermes_sse(_chunks((record,))))
+
+    with pytest.raises(HermesProtocolError) as caught:
+        await anext(stream)
+
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=canaries,
+        forbidden_objects=(record,),
+    )
+    assert cast("_HasAsyncGeneratorFrame", stream).ag_frame is None
 
 
 @pytest.mark.asyncio
@@ -564,7 +1133,11 @@ async def test_composite_golden_emits_one_success_in_closed_event_order() -> Non
     payload = load_golden_bytes("chat_completions/complete.sse")
     assert await _decode(partition_bytes(payload)) == (
         AssistantDeltaEvent(text="The lamp "),
-        ToolProgressEvent(tool_name="home_assistant", status="running"),
+        ToolProgressEvent(
+            tool_call_id="call-contract-001",
+            tool_name="home_assistant",
+            status=hermes_api.ToolProgressStatus.RUNNING,
+        ),
         KeepaliveEvent(),
         AssistantDeltaEvent(text="is on."),
         UsageEvent(input_tokens=12, output_tokens=6, total_tokens=18),
@@ -600,24 +1173,424 @@ async def test_additive_application_fields_are_ignored_at_every_wire_level() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("hermes", _ACCEPTED_STOP_METADATA)
+async def test_stop_terminal_accepts_only_the_total_success_rows(
+    hermes: object,
+) -> None:
+    """Every D-01 accepted omission/boolean row has one exact public value."""
+    record = _terminal_record(finish_reason="stop", hermes=hermes)
+
+    assert await _decode((record + _canonical_records()[6],)) == (
+        TerminalEvent(
+            outcome=TerminalOutcome.SUCCESS,
+            partial=False,
+            failure_reason=None,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hermes", _ACCEPTED_LENGTH_METADATA)
+async def test_length_terminal_accepts_only_the_total_truncation_rows(
+    hermes: object,
+) -> None:
+    """Every D-02 accepted omission/boolean/code row maps identically."""
+    record = _terminal_record(finish_reason="length", hermes=hermes)
+
+    assert await _decode((record + _canonical_records()[6],)) == (
+        TerminalEvent(
+            outcome=TerminalOutcome.LENGTH,
+            partial=True,
+            failure_reason=TerminalFailureReason.OUTPUT_TRUNCATED,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hermes", _ACCEPTED_ERROR_METADATA)
+async def test_error_terminal_accepts_only_the_total_upstream_error_rows(
+    hermes: object,
+) -> None:
+    """Every D-03 accepted row preserves partial and closes public reasons."""
+    assert isinstance(hermes, dict)
+    metadata = cast("dict[str, object]", hermes)
+    code = metadata.get("error_code")
+    expected_reason = (
+        TerminalFailureReason.UNKNOWN
+        if code == "future_safe_error"
+        else TerminalFailureReason.AGENT_ERROR
+    )
+    record = _terminal_record(finish_reason="error", hermes=metadata)
+
+    assert await _decode((record + _canonical_records()[6],)) == (
+        TerminalEvent(
+            outcome=TerminalOutcome.UPSTREAM_ERROR,
+            partial=cast("bool", metadata["partial"]),
+            failure_reason=expected_reason,
+        ),
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("finish_reason", "outcome"),
+    ("finish_reason", "hermes"),
     [
-        ("length", TerminalOutcome.LENGTH),
-        ("error", TerminalOutcome.UPSTREAM_ERROR),
+        ("stop", _terminal_metadata(completed=False)),
+        ("stop", _terminal_metadata(failed=True)),
+        ("stop", _terminal_metadata(partial=True)),
+        ("stop", _terminal_metadata(error_code="output_truncated")),
+        ("length", _terminal_metadata(completed=True)),
+        ("length", _terminal_metadata(failed=True)),
+        ("length", _terminal_metadata(partial=False)),
+        ("length", _terminal_metadata(error_code="agent_error")),
+        ("error", _terminal_metadata(partial=False, completed=True)),
+        ("error", _terminal_metadata(partial=False, failed=False)),
+    ],
+    ids=[
+        "stop-completed-false",
+        "stop-failed-true",
+        "stop-partial-true",
+        "stop-code-present",
+        "length-completed-true",
+        "length-failed-true",
+        "length-partial-false",
+        "length-wrong-code",
+        "error-completed-true",
+        "error-failed-false",
     ],
 )
-async def test_non_success_finish_reasons_are_typed_terminals(
+async def test_contradictory_terminal_rows_fail_without_precedence(
     finish_reason: str,
-    outcome: TerminalOutcome,
+    hermes: dict[str, object],
 ) -> None:
-    """Exact-version abnormal finish plus DONE retains the abnormal outcome."""
-    record = _derived_finish_record(
-        finish_reason=finish_reason,
-        include_usage=False,
+    """Every field-level contradiction is rejected rather than normalized."""
+    with pytest.raises(HermesProtocolError):
+        await _decode(
+            (
+                _terminal_record(finish_reason=finish_reason, hermes=hermes)
+                + _canonical_records()[6],
+            )
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason", ["stop", "length", "error"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("completed", None),
+        ("completed", 1),
+        ("completed", "true"),
+        ("failed", None),
+        ("failed", 0),
+        ("failed", "false"),
+        ("partial", None),
+        ("partial", 1),
+        ("partial", "true"),
+        ("error_code", None),
+        ("error_code", ""),
+        ("error_code", "x" * 257),
+        ("error_code", "contains space"),
+        ("error_code", 7),
+    ],
+)
+async def test_present_terminal_metadata_requires_exact_types_and_bounds(
+    finish_reason: str,
+    field: str,
+    value: object,
+) -> None:
+    """Nulls, coercible lookalikes, and unsafe codes fail for every finish."""
+    metadata = _terminal_metadata(
+        partial=False if finish_reason == "error" else _OMITTED
     )
+    metadata[field] = value
+
+    with pytest.raises(HermesProtocolError):
+        await _decode(
+            (
+                _terminal_record(finish_reason=finish_reason, hermes=metadata)
+                + _canonical_records()[6],
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_error_requires_root_hermes_and_present_exact_partial() -> None:
+    """D-10 rejects both a missing root and an omitted error partial flag."""
+    invalid_metadata: tuple[object, ...] = (_OMITTED, {})
+    for hermes in invalid_metadata:
+        with pytest.raises(HermesProtocolError):
+            await _decode(
+                (
+                    _terminal_record(finish_reason="error", hermes=hermes)
+                    + _canonical_records()[6],
+                )
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hermes", [None, [], False, "not-an-object"])
+async def test_present_root_hermes_requires_an_exact_json_object(
+    hermes: object,
+) -> None:
+    """A present canonical lifecycle envelope cannot be a coercible lookalike."""
+    with pytest.raises(HermesProtocolError):
+        await _decode(
+            (
+                _terminal_record(finish_reason="stop", hermes=hermes)
+                + _canonical_records()[6],
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_finish_reason_omission_differs_from_explicit_null() -> None:
+    """A missing choice member fails while explicit null remains nonterminal."""
+    missing = _terminal_record()
+    with pytest.raises(HermesProtocolError):
+        await _decode((missing + _canonical_records()[6],))
+
+    explicit_null = _terminal_record(finish_reason=None)
+    assert await _decode((explicit_null + _canonical_records()[6],)) == (
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS),
+    )
+
+    with pytest.raises(HermesProtocolError):
+        await _decode(
+            (
+                _terminal_record(finish_reason=None, hermes={"partial": False})
+                + _canonical_records()[6],
+            )
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field",
+    ["completed", "failed", "partial", "error_code"],
+)
+@pytest.mark.parametrize("conflicting", [False, True], ids=["same", "conflicting"])
+async def test_duplicate_approved_terminal_members_fail_before_collapse(
+    field: str,
+    conflicting: object,
+) -> None:
+    """Repeated lifecycle members fail even when their JSON values agree."""
+    assert isinstance(conflicting, bool)
+    base = {
+        "completed": "false",
+        "failed": "true",
+        "partial": "false",
+        "error_code": '"agent_error"',
+    }
+    alternate = {
+        "completed": "true",
+        "failed": "false",
+        "partial": "true",
+        "error_code": '"future_safe_error"',
+    }
+    duplicate = alternate[field] if conflicting else base[field]
+    hermes_json = (
+        "{"
+        + ",".join(
+            f"{json.dumps(name)}:{value}"
+            for name, value in (*base.items(), (field, duplicate))
+        )
+        + "}"
+    )
+    record = raw_json_object_sse_record(
+        (
+            (
+                "choices",
+                '[{"delta":{},"finish_reason":"error"}]',
+            ),
+            ("hermes", hermes_json),
+        )
+    )
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((record + _canonical_records()[6],))
+
+
+@pytest.mark.asyncio
+async def test_terminal_metadata_is_root_scoped_and_additive_data_is_discarded() -> (
+    None
+):
+    """Aliases outside root and duplicate members in ignored objects are inert."""
+    record = raw_json_object_sse_record(
+        (
+            (
+                "choices",
+                '[{"delta":{},"finish_reason":"length",'
+                '"partial":false,"error_code":"agent_error"}]',
+            ),
+            (
+                "hermes",
+                '{"completed":false,"failed":false,"partial":true,'
+                '"error_code":"output_truncated",'
+                '"raw":{"partial":false,"partial":true},'
+                '"error":{"message":"ignored","message":"still-ignored"}}',
+            ),
+            ("completed", "true"),
+            ("failed", "true"),
+            ("partial", "false"),
+            ("error_code", '"agent_error"'),
+        )
+    )
+
+    assert await _decode((record + _canonical_records()[6],)) == (
+        TerminalEvent(
+            outcome=TerminalOutcome.LENGTH,
+            partial=True,
+            failure_reason=TerminalFailureReason.OUTPUT_TRUNCATED,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bytewise", [False, True], ids=["whole", "bytewise"])
+@pytest.mark.parametrize(
+    ("fixture", "expected"),
+    [
+        (
+            "terminal_length.sse",
+            (
+                UsageEvent(input_tokens=8, output_tokens=4, total_tokens=12),
+                TerminalEvent(
+                    outcome=TerminalOutcome.LENGTH,
+                    partial=True,
+                    failure_reason=TerminalFailureReason.OUTPUT_TRUNCATED,
+                ),
+            ),
+        ),
+        (
+            "terminal_agent_error.sse",
+            (
+                UsageEvent(input_tokens=8, output_tokens=2, total_tokens=10),
+                TerminalEvent(
+                    outcome=TerminalOutcome.UPSTREAM_ERROR,
+                    partial=False,
+                    failure_reason=TerminalFailureReason.AGENT_ERROR,
+                ),
+            ),
+        ),
+    ],
+)
+async def test_terminal_evidence_fixtures_map_to_exact_safe_public_events(
+    fixture: str,
+    expected: tuple[object, ...],
+    bytewise: object,
+) -> None:
+    """Immutable tag-shaped terminal evidence decodes identically by chunks."""
+    assert isinstance(bytewise, bool)
+    payload = load_golden_bytes(f"chat_completions/{fixture}")
+    parts = partition_bytes(payload) if bytewise else (payload,)
+
+    assert await _decode(parts) == expected
+
+
+@pytest.mark.asyncio
+async def test_tagged_task_exception_contradiction_fails_without_public_prefix() -> (
+    None
+):
+    """The canonical completed/failed contradiction cannot yield usage or terminal."""
+    payload = load_golden_bytes(
+        "chat_completions/terminal_task_exception_contradiction.sse"
+    )
+
+    assert await _decode_prefix_before_failure((payload,)) == ()
+
+
+@pytest.mark.asyncio
+async def test_design_terminal_matrix_is_executable_contract_evidence() -> None:
+    """Every immutable design row produces its declared event or rejection."""
+    matrix = load_golden_json("chat_completions/terminal_design_matrix.json")
+    cases = cast("list[dict[str, Any]]", matrix["cases"])
     done = _canonical_records()[6]
-    assert await _decode((record + done,)) == (TerminalEvent(outcome=outcome),)
+    for case in cases:
+        wire = cast("dict[str, object]", case["wire"])
+        expected = cast("dict[str, Any]", case["expected"])
+        record = _terminal_record(
+            finish_reason=wire["finish_reason"],
+            hermes=wire.get("hermes", _OMITTED),
+        )
+        if expected["disposition"] == "reject":
+            with pytest.raises(HermesProtocolError):
+                await _decode((record + done,))
+            continue
+        public = cast("dict[str, object]", expected["public_event"])
+        assert await _decode((record + done,)) == (
+            TerminalEvent(
+                outcome=TerminalOutcome(cast("str", public["outcome"])),
+                partial=cast("bool", public["partial"]),
+                failure_reason=(
+                    None
+                    if public["failure_reason"] is None
+                    else TerminalFailureReason(cast("str", public["failure_reason"]))
+                ),
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_raw_terminal_errors_and_unknown_codes_are_never_retained() -> None:
+    """Accepted and rejected terminal records expose only closed safe facts."""
+    unknown_code = "terminal-future-private-code-canary"
+    accepted = _terminal_record(
+        finish_reason="error",
+        hermes={
+            "partial": True,
+            "error_code": unknown_code,
+            "error": {"message": "accepted-raw-terminal-error-canary"},
+        },
+        extra={
+            "error": {
+                "message": "accepted-root-terminal-error-canary",
+                "type": "AcceptedPrivateExceptionCanary",
+            }
+        },
+    )
+    accepted_stream = cast(
+        "AsyncGenerator[object]",
+        async_decode_hermes_sse(_chunks((accepted + _canonical_records()[6],))),
+    )
+    event = await anext(accepted_stream)
+    assert event == TerminalEvent(
+        outcome=TerminalOutcome.UPSTREAM_ERROR,
+        partial=True,
+        failure_reason=TerminalFailureReason.UNKNOWN,
+    )
+    assert unknown_code not in repr(event)
+    with pytest.raises(StopAsyncIteration):
+        await anext(accepted_stream)
+    assert cast("_HasAsyncGeneratorFrame", accepted_stream).ag_frame is None
+
+    rejected_canaries = (
+        "rejected-root-terminal-error-canary",
+        "rejected-hermes-terminal-error-canary",
+        "RejectedPrivateExceptionCanary",
+    )
+    rejected = _terminal_record(
+        finish_reason="error",
+        hermes={
+            "completed": True,
+            "failed": True,
+            "partial": False,
+            "error": {"message": rejected_canaries[1]},
+        },
+        extra={
+            "error": {
+                "message": rejected_canaries[0],
+                "type": rejected_canaries[2],
+            }
+        },
+    )
+    with pytest.raises(HermesProtocolError) as caught:
+        await _decode((rejected + _canonical_records()[6],))
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=rejected_canaries,
+        forbidden_objects=(rejected,),
+    )
 
 
 @pytest.mark.asyncio
@@ -662,6 +1635,17 @@ async def test_application_data_after_terminal_is_rejected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_keepalive_after_terminal_is_accepted() -> None:
+    """A heartbeat between the finish chunk and DONE keeps the stream valid."""
+    finish = _derived_finish_record(finish_reason="stop", include_usage=False)
+
+    assert await _decode((finish + b": ping\n\n" + b"data: [DONE]\n\n",)) == (
+        KeepaliveEvent(),
+        TerminalEvent(outcome=TerminalOutcome.SUCCESS, partial=False),
+    )
+
+
+@pytest.mark.asyncio
 async def test_duplicate_finish_application_data_after_terminal_is_rejected() -> None:
     """Duplicate finish data fails before the terminal becomes observable."""
     finish = _derived_finish_record(finish_reason="stop", include_usage=False)
@@ -675,6 +1659,7 @@ async def test_duplicate_finish_application_data_after_terminal_is_rejected() ->
     [
         b"data: {not-json}\n\n",
         _data_record(None),
+        _data_record([], event="hermes.tool.progress"),
         _data_record({"choices": []}),
         _data_record(
             cast("object", {"choices": [{"delta": [], "finish_reason": None}]})
@@ -691,18 +1676,38 @@ async def test_duplicate_finish_application_data_after_terminal_is_rejected() ->
         ),
         _data_record({"tool": "home_assistant"}, event="hermes.tool.progress"),
         _data_record(
-            {"tool": "", "status": "running"},
+            {"tool": "home_assistant", "status": "running"},
             event="hermes.tool.progress",
         ),
         _data_record(
-            {"tool": "home_assistant", "status": ""},
+            {"toolCallId": "call-contract-001", "tool": "", "status": "running"},
+            event="hermes.tool.progress",
+        ),
+        _data_record(
+            {
+                "toolCallId": "call-contract-001",
+                "tool": "home_assistant",
+                "status": "",
+            },
+            event="hermes.tool.progress",
+        ),
+        _data_record(
+            {
+                "toolCallId": "call-contract-001",
+                "tool": "home_assistant",
+                "status": "queued",
+            },
             event="hermes.tool.progress",
         ),
         _derived_usage_record("prompt_tokens", _BOOLEAN_TOKEN_COUNT),
         _derived_usage_record("completion_tokens", -1),
         _derived_usage_record("total_tokens", "3"),
         _data_record(
-            {"tool": "home_assistant", "status": "running"},
+            {
+                "toolCallId": "call-contract-001",
+                "tool": "home_assistant",
+                "status": "running",
+            },
             event="hermes.unknown",
         ),
         _derived_finish_record(finish_reason="mystery", include_usage=False),
@@ -710,13 +1715,16 @@ async def test_duplicate_finish_application_data_after_terminal_is_rejected() ->
     ids=[
         "invalid-json",
         "non-object",
+        "non-object-progress",
         "empty-choices",
         "invalid-delta",
         "invalid-content",
         "invalid-usage",
         "invalid-progress",
+        "missing-tool-call-id",
         "empty-tool",
         "empty-status",
+        "unknown-status",
         "boolean-token-count",
         "negative-token-count",
         "coercible-token-count",
@@ -769,6 +1777,48 @@ async def test_wire_validation_failures_retain_no_private_input_exception() -> N
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("event", "document"),
+    [
+        (
+            "hermes.tool.progress",
+            {
+                "toolCallId": "call-contract-001",
+                "tool": "home_assistant",
+                "status": "running",
+            },
+        ),
+        (
+            None,
+            {
+                "choices": [
+                    {"delta": {"content": "not-retained"}, "finish_reason": None}
+                ]
+            },
+        ),
+    ],
+    ids=["tool", "chat"],
+)
+async def test_pair_materialization_recursion_fails_as_protocol_error(
+    event: str | None,
+    document: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A projection recursion limit remains a sanitized protocol failure."""
+
+    def fail_materialization(_: object) -> object:
+        raise RecursionError
+
+    monkeypatch.setattr(
+        "hermes_agent_api_client.protocol._materialize_json_value",
+        fail_materialization,
+    )
+
+    with pytest.raises(HermesProtocolError):
+        await _decode((_data_record(document, event=event),))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("invalid_data", "canary"),
     [
         ("{direct-sse-json-frame-canary}", "direct-sse-json-frame-canary"),
@@ -799,6 +1849,30 @@ async def test_direct_sse_failures_scrub_raw_payloads_from_traceback_frames(
         caught.value,
         canaries=(prior_canary, canary),
         forbidden_objects=(payload,),
+    )
+
+
+@pytest.mark.asyncio
+async def test_oversized_json_integer_is_a_closed_protocol_failure() -> None:
+    """A decoder ValueError is malformed wire data, never retryable transport."""
+    canary = "direct-oversized-integer-canary"
+    payload = (
+        b'data: {"choices":[],"' + canary.encode() + b'":' + b"9" * 5_000 + b"}\n\n"
+    )
+    source = _ClosableChunks((payload,))
+
+    with pytest.raises(HermesProtocolError) as caught:
+        tuple([event async for event in async_decode_hermes_sse(source)])
+
+    assert type(caught.value) is HermesProtocolError
+    assert not isinstance(caught.value, HermesTransportError)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert source.closed is True
+    _assert_package_traceback_is_scrubbed(
+        caught.value,
+        canaries=(canary,),
+        forbidden_objects=(payload, source),
     )
 
 

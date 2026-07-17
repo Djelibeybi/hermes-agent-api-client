@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "design-derived",
+  "decision_refs": [
+    "D-01",
+    "D-02",
+    "D-03",
+    "D-04"
+  ],
+  "cases": [
+    {
+      "id": "stop-hermes-omitted",
+      "wire": {
+        "finish_reason": "stop"
+      },
+      "expected": {
+        "disposition": "accept",
+        "public_event": {
+          "outcome": "success",
+          "partial": false,
+          "failure_reason": null
+        }
+      },
+      "decision_refs": [
+        "D-01"
+      ]
+    },
+    {
+      "id": "stop-lifecycle-fields-omitted",
+      "wire": {
+        "finish_reason": "stop",
+        "hermes": {}
+      },
+      "expected": {
+        "disposition": "accept",
+        "public_event": {
+          "outcome": "success",
+          "partial": false,
+          "failure_reason": null
+        }
+      },
+      "decision_refs": [
+        "D-01"
+      ]
+    },
+    {
+      "id": "length-hermes-omitted",
+      "wire": {
+        "finish_reason": "length"
+      },
+      "expected": {
+        "disposition": "accept",
+        "public_event": {
+          "outcome": "length",
+          "partial": true,
+          "failure_reason": "output_truncated"
+        }
+      },
+      "decision_refs": [
+        "D-02"
+      ]
+    },
+    {
+      "id": "length-lifecycle-fields-omitted",
+      "wire": {
+        "finish_reason": "length",
+        "hermes": {}
+      },
+      "expected": {
+        "disposition": "accept",
+        "public_event": {
+          "outcome": "length",
+          "partial": true,
+          "failure_reason": "output_truncated"
+        }
+      },
+      "decision_refs": [
+        "D-02"
+      ]
+    },
+    {
+      "id": "error-code-omitted",
+      "wire": {
+        "finish_reason": "error",
+        "hermes": {
+          "partial": false
+        }
+      },
+      "expected": {
+        "disposition": "accept",
+        "public_event": {
+          "outcome": "upstream_error",
+          "partial": false,
+          "failure_reason": "agent_error"
+        }
+      },
+      "decision_refs": [
+        "D-03"
+      ]
+    },
+    {
+      "id": "error-unknown-bounded-safe-code",
+      "wire": {
+        "finish_reason": "error",
+        "hermes": {
+          "completed": false,
+          "partial": true,
+          "failed": true,
+          "error_code": "future_safe_error"
+        }
+      },
+      "expected": {
+        "disposition": "accept",
+        "public_event": {
+          "outcome": "upstream_error",
+          "partial": true,
+          "failure_reason": "unknown"
+        }
+      },
+      "decision_refs": [
+        "D-03"
+      ]
+    },
+    {
+      "id": "stop-explicit-null-completed",
+      "wire": {
+        "finish_reason": "stop",
+        "hermes": {
+          "completed": null
+        }
+      },
+      "expected": {
+        "disposition": "reject",
+        "error": "HermesProtocolError"
+      },
+      "decision_refs": [
+        "D-01",
+        "D-04"
+      ]
+    },
+    {
+      "id": "length-explicit-null-partial",
+      "wire": {
+        "finish_reason": "length",
+        "hermes": {
+          "partial": null
+        }
+      },
+      "expected": {
+        "disposition": "reject",
+        "error": "HermesProtocolError"
+      },
+      "decision_refs": [
+        "D-02",
+        "D-04"
+      ]
+    },
+    {
+      "id": "error-required-partial-omitted",
+      "wire": {
+        "finish_reason": "error",
+        "hermes": {}
+      },
+      "expected": {
+        "disposition": "reject",
+        "error": "HermesProtocolError"
+      },
+      "decision_refs": [
+        "D-03"
+      ]
+    },
+    {
+      "id": "error-explicit-null-partial",
+      "wire": {
+        "finish_reason": "error",
+        "hermes": {
+          "partial": null
+        }
+      },
+      "expected": {
+        "disposition": "reject",
+        "error": "HermesProtocolError"
+      },
+      "decision_refs": [
+        "D-03",
+        "D-04"
+      ]
+    }
+  ]
+}

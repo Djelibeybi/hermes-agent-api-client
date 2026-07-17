@@ -12,15 +12,22 @@ from .models import (
     HermesEvent,
     KeepaliveEvent,
     TerminalEvent,
+    TerminalFailureReason,
     TerminalOutcome,
     ToolProgressEvent,
+    ToolProgressStatus,
     UsageEvent,
 )
 from .protocol import (
+    _MISSING_JSON_MEMBER,  # pyright: ignore[reportPrivateUsage]
     HermesProtocolError,
     HermesTransportError,
+    _json_object_pairs_hook,  # pyright: ignore[reportPrivateUsage]
     _parse_chat_chunk,  # pyright: ignore[reportPrivateUsage]
     _parse_tool_progress,  # pyright: ignore[reportPrivateUsage]
+    _project_chat_chunk_object,  # pyright: ignore[reportPrivateUsage]
+    _project_tool_progress_object,  # pyright: ignore[reportPrivateUsage]
+    _TerminalMetadata,  # pyright: ignore[reportPrivateUsage]
 )
 
 if TYPE_CHECKING:
@@ -33,6 +40,7 @@ MAX_PENDING_BYTES = 262_144
 MAX_EVENT_DATA_CHARS = 65_536
 _CR = 0x0D
 _LF = 0x0A
+_TERMINAL_MAPPING_FAILURE = object()
 
 
 @runtime_checkable
@@ -73,8 +81,8 @@ def _reraise_cancellation(cancellation: asyncio.CancelledError) -> Never:
 def _load_json_safely(data: str) -> tuple[bool, object]:
     """Parse JSON without retaining a value-bearing parser exception."""
     try:
-        return (True, json.loads(data))
-    except (json.JSONDecodeError, UnicodeError):
+        return (True, json.loads(data, object_pairs_hook=_json_object_pairs_hook))
+    except (ValueError, RecursionError, UnicodeError):
         return (False, None)
 
 
@@ -91,7 +99,73 @@ def _decode_utf8_safely(
         return (False, "")
 
 
-def _decode_application_record(  # noqa: PLR0911 - every invalid wire shape exits locally
+def _map_terminal_event(  # noqa: PLR0911 - closed total matrix exits per row
+    finish_reason: str | None,
+    metadata: _TerminalMetadata,
+) -> TerminalEvent | None | object:
+    """Map only the locked total terminal rows into closed public values."""
+    missing = _MISSING_JSON_MEMBER
+    if finish_reason is None:
+        if any(
+            value is not missing
+            for value in (
+                metadata.completed,
+                metadata.failed,
+                metadata.partial,
+                metadata.error_code,
+            )
+        ):
+            return _TERMINAL_MAPPING_FAILURE
+        return None
+
+    if finish_reason == "stop":
+        if (
+            metadata.completed not in (missing, True)
+            or metadata.failed not in (missing, False)
+            or metadata.partial not in (missing, False)
+            or metadata.error_code is not missing
+        ):
+            return _TERMINAL_MAPPING_FAILURE
+        return TerminalEvent(
+            outcome=TerminalOutcome.SUCCESS,
+            partial=False,
+            failure_reason=None,
+        )
+
+    if finish_reason == "length":
+        if (
+            metadata.completed not in (missing, False)
+            or metadata.failed not in (missing, False)
+            or metadata.partial not in (missing, True)
+            or metadata.error_code not in (missing, "output_truncated")
+        ):
+            return _TERMINAL_MAPPING_FAILURE
+        return TerminalEvent(
+            outcome=TerminalOutcome.LENGTH,
+            partial=True,
+            failure_reason=TerminalFailureReason.OUTPUT_TRUNCATED,
+        )
+
+    if (
+        not metadata.root_present
+        or metadata.completed not in (missing, False)
+        or metadata.failed not in (missing, True)
+        or metadata.partial is missing
+    ):
+        return _TERMINAL_MAPPING_FAILURE
+    failure_reason = (
+        TerminalFailureReason.AGENT_ERROR
+        if metadata.error_code in (missing, "agent_error")
+        else TerminalFailureReason.UNKNOWN
+    )
+    return TerminalEvent(
+        outcome=TerminalOutcome.UPSTREAM_ERROR,
+        partial=cast("bool", metadata.partial),
+        failure_reason=failure_reason,
+    )
+
+
+def _decode_application_record(  # noqa: C901, PLR0911 - invalid wire shapes exit locally
     event_name: str | None,
     data: str,
 ) -> tuple[HermesEvent, ...] | None:
@@ -100,19 +174,44 @@ def _decode_application_record(  # noqa: PLR0911 - every invalid wire shape exit
     if not valid_json:
         return None
     if event_name == "hermes.tool.progress":
-        progress = _parse_tool_progress(document)
+        projected = _project_tool_progress_object(document)
+        document = None
+        if projected is None:
+            return None
+        progress = _parse_tool_progress(projected)
+        projected = None
         if progress is None:
             return None
-        return (ToolProgressEvent(tool_name=progress.tool, status=progress.status),)
+        return (
+            ToolProgressEvent(
+                tool_call_id=progress.tool_call_id,
+                tool_name=progress.tool,
+                status=ToolProgressStatus(progress.status),
+            ),
+        )
     if event_name not in (None, "", "message"):
         return None
 
-    chunk = _parse_chat_chunk(document)
+    projected = _project_chat_chunk_object(document)
+    document = None
+    if projected is None:
+        return None
+    chat_document = projected.document
+    terminal_metadata = projected.terminal_metadata
+    projected = None
+    chunk = _parse_chat_chunk(chat_document)
+    chat_document = None
     if chunk is None:
+        terminal_metadata = None
         return None
     choice = chunk.choices[0]
     delta = choice.delta
     finish_reason = choice.finish_reason
+    terminal_event = _map_terminal_event(finish_reason, terminal_metadata)
+    terminal_metadata = None
+    if terminal_event is _TERMINAL_MAPPING_FAILURE:
+        terminal_event = None
+        return None
 
     events: list[HermesEvent] = []
     role = delta.role
@@ -130,14 +229,8 @@ def _decode_application_record(  # noqa: PLR0911 - every invalid wire shape exit
             )
         )
 
-    terminal_outcome = {
-        None: None,
-        "stop": TerminalOutcome.SUCCESS,
-        "length": TerminalOutcome.LENGTH,
-        "error": TerminalOutcome.UPSTREAM_ERROR,
-    }[finish_reason]
-    if terminal_outcome is not None:
-        events.append(TerminalEvent(outcome=terminal_outcome))
+    if isinstance(terminal_event, TerminalEvent):
+        events.append(terminal_event)
 
     if not events and role != "assistant":
         return None
@@ -207,6 +300,9 @@ class _SSEDecoder:
         """Enforce the one-terminal boundary without retaining raw events."""
         accepted: list[HermesEvent] = []
         for event in events:
+            if isinstance(event, KeepaliveEvent) and not self._done_seen:
+                accepted.append(event)
+                continue
             if self._pending_terminal is not None:
                 return None
             if isinstance(event, TerminalEvent):

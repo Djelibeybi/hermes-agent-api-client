@@ -13,12 +13,13 @@ from email.parser import BytesParser
 from email.policy import default
 from importlib.metadata import metadata, version
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from enum import StrEnum
 
 
 _INVALID_WHEEL_CONTENTS_MESSAGE = (
@@ -221,9 +222,11 @@ def test_public_exports_are_exact() -> None:
         "HermesProtocolError",
         "HermesTransportError",
         "KeepaliveEvent",
+        "TerminalFailureReason",
         "TerminalEvent",
         "TerminalOutcome",
         "ToolProgressEvent",
+        "ToolProgressStatus",
         "UsageEvent",
         "__version__",
     }
@@ -241,6 +244,23 @@ def test_public_failure_types_are_available_through_star_import() -> None:
     assert isinstance(protocol_type, type)
     assert issubclass(identity_type, protocol_type)
     assert issubclass(capability_type, protocol_type)
+
+
+def test_conversation_event_enums_are_available_through_star_import() -> None:
+    """Star imports expose the exact public tool and terminal enum vocabulary."""
+    namespace: dict[str, object] = {}
+    exec("from hermes_agent_api_client import *", namespace)  # noqa: S102
+
+    tool_status = cast("type[StrEnum]", namespace["ToolProgressStatus"])
+    failure_reason = cast("type[StrEnum]", namespace["TerminalFailureReason"])
+    assert isinstance(tool_status, type)
+    assert isinstance(failure_reason, type)
+    assert tuple(tool_status.__members__) == ("RUNNING", "COMPLETED")
+    assert tuple(failure_reason.__members__) == (
+        "OUTPUT_TRUNCATED",
+        "AGENT_ERROR",
+        "UNKNOWN",
+    )
 
 
 def test_distribution_archives_contain_only_release_files(
@@ -388,7 +408,10 @@ def test_repository_ignore_rules_keep_the_lockfile_trackable(tmp_path: Path) -> 
         check=True,
     )
     (tmp_path / ".gitignore").write_bytes((project_root / ".gitignore").read_bytes())
-    (tmp_path / ".git" / "info" / "exclude").write_text("")
+    # An empty init template (as pre-commit sets) omits .git/info entirely.
+    exclude = tmp_path / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text("")
     (tmp_path / "uv.lock").touch()
 
     result = subprocess.run(  # noqa: S603

@@ -1,16 +1,3 @@
-/config
-config2/*
-
-tests/testing_config/deps
-tests/testing_config/home-assistant.log*
-
-# hass-release
-data/
-.token
-
-# Translations
-homeassistant/components/*/translations
-
 # Hide sublime text stuff
 *.sublime-project
 *.sublime-workspace
@@ -50,13 +37,10 @@ build
 eggs
 .eggs
 parts
-bin
 var
 sdist
 develop-eggs
 .installed.cfg
-lib
-lib64
 pip-wheel-metadata
 
 # Logs
@@ -77,11 +61,6 @@ junit.xml
 # Translations
 *.mo
 
-# Mr Developer
-.mr.developer.cfg
-.project
-.pydevproject
-
 .tool-versions
 
 # emacs auto backups
@@ -95,8 +74,6 @@ pip-selfcheck.json
 venv
 .venv
 Pipfile*
-share/*
-/Scripts/
 
 # vimmy stuff
 *.swp
@@ -104,43 +81,17 @@ share/*
 tags
 ctags.tmp
 
-# vagrant stuff
-virtualization/vagrant/setup_done
-virtualization/vagrant/.vagrant
-virtualization/vagrant/config
-
 # Visual Studio Code
 .vscode/*
-!.vscode/cSpell.json
 !.vscode/extensions.json
 !.vscode/tasks.json
-!.vscode/settings.default.jsonc
 .env
 
 # Windows Explorer
 desktop.ini
-/home-assistant.pyproj
-/home-assistant.sln
-/.vs/*
-
-# mypy
-/.mypy_cache/*
-/.dmypy.json
 
 # Secrets
-.lokalise_token
-
-# monkeytype
-monkeytype.sqlite3
-
-# This is left behind by Azure Restore Cache
-tmp_cache
-
-# python-language-server / Rope
-.ropeproject
-
-# Will be created from script/split_tests.py
-pytest_buckets.txt
+.token
 
 # AI tooling
 .claude/settings.local.json
