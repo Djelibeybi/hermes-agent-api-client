@@ -95,6 +95,6 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1. Typed Hermes API Client | v0.1.0 | 1/1 | Complete | 2026-07-15 |
-| 2. Conversation Event Contract | v0.3.0 | 6/6 | Complete   | 2026-07-17 |
+| 2. Conversation Event Contract | v0.3.0 | 6/6 | Complete    | 2026-07-17 |
 | 3. Session Header Safety | v0.3.0 | 0/TBD | Not started | - |
 | 4. Contract and Distribution Verification | v0.3.0 | 0/TBD | Not started | - |
