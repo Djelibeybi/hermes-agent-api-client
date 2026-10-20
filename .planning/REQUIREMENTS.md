@@ -9,15 +9,15 @@ Requirements for the Conversation Contract milestone. Each requirement maps to e
 
 ### Session Headers
 
-- [ ] **SESS-01**: A Python consumer can independently provide `session_id`, `session_key`, both, or neither to `stream_chat_events`, with non-`None` values mapped only to `X-Hermes-Session-Id` and `X-Hermes-Session-Key`.
-- [ ] **SESS-02**: A Python consumer receives local rejection unless each supplied session value is an exact built-in `str` containing 1-256 characters in the visible ASCII range `0x21..0x7e`, and `session_id` additionally rejects path-shaped values.
-- [ ] **SESS-03**: An invalid session value fails before network dispatch as the existing safe, non-retryable local-input classification, without including the rejected value in text or metadata.
-- [ ] **SESS-04**: Each stream constructs fresh request headers without mutating the caller's request mapping, the client's bound authorization headers, or another concurrent request's session values.
-- [ ] **SESS-05**: Session values are absent from public failures, `str`, `repr`, tracebacks, causes, contexts, and retained generator locals after rejection, completion, early close, or cancellation.
+- [x] **SESS-01**: A Python consumer can independently provide `session_id`, `session_key`, both, or neither to `stream_chat_events`, with non-`None` values mapped only to `X-Hermes-Session-Id` and `X-Hermes-Session-Key`.
+- [x] **SESS-02**: A Python consumer receives local rejection unless each supplied session value is an exact built-in `str` containing 1-256 characters in the visible ASCII range `0x21..0x7e`, and `session_id` additionally rejects path-shaped values.
+- [x] **SESS-03**: An invalid session value fails before network dispatch as the existing safe, non-retryable local-input classification, without including the rejected value in text or metadata.
+- [x] **SESS-04**: Each stream constructs fresh request headers without mutating the caller's request mapping, the client's bound authorization headers, or another concurrent request's session values.
+- [x] **SESS-05**: Session values are absent from public failures, `str`, `repr`, tracebacks, causes, contexts, and retained generator locals after rejection, completion, early close, or cancellation.
 
 ### Stream Lifecycle
 
-- [ ] **HTTP-02**: Closing or cancelling a stream closes only its response, never an injected caller-owned HTTP client, and `asyncio.CancelledError` propagates after cleanup.
+- [x] **HTTP-02**: Closing or cancelling a stream closes only its response, never an injected caller-owned HTTP client, and `asyncio.CancelledError` propagates after cleanup.
 
 ### Tool Progress
 
@@ -73,12 +73,12 @@ Each active requirement maps to exactly one v0.3.0 roadmap phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SESS-01 | Phase 3 | Pending |
-| SESS-02 | Phase 3 | Pending |
-| SESS-03 | Phase 3 | Pending |
-| SESS-04 | Phase 3 | Pending |
-| SESS-05 | Phase 3 | Pending |
-| HTTP-02 | Phase 3 | Pending |
+| SESS-01 | Phase 3 | Complete |
+| SESS-02 | Phase 3 | Complete |
+| SESS-03 | Phase 3 | Complete |
+| SESS-04 | Phase 3 | Complete |
+| SESS-05 | Phase 3 | Complete |
+| HTTP-02 | Phase 3 | Complete |
 | TOOL-01 | Phase 2 | Complete |
 | TOOL-02 | Phase 2 | Complete |
 | TOOL-03 | Phase 2 | Complete |

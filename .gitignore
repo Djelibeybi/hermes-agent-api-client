@@ -96,3 +96,6 @@ desktop.ini
 # AI tooling
 .claude/
 .serena/
+
+# GSD session-local state
+.planning/milestone.lock

@@ -1,0 +1,33 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": "v0.3.0",
+  "phases": [
+    {
+      "number": "1",
+      "name": "Typed Hermes API Client",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "Conversation Event Contract",
+      "status": "complete"
+    },
+    {
+      "number": "3",
+      "name": "Session Header Safety",
+      "status": "complete"
+    },
+    {
+      "number": "4",
+      "name": "Contract and Distribution Verification",
+      "status": "pending"
+    }
+  ],
+  "next": {
+    "command": "/gsd-progress --next",
+    "label": "Advance to the next step (plan phase 4)",
+    "reason": "Phase 3 of 3 — needs a plan"
+  },
+  "updated_at": "2026-10-20T08:24:41.802Z"
+}
