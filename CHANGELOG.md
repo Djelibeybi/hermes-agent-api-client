@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v0.3.2 (2026-10-20)
+
+### Bug Fixes
+
+- **deps**: Clear GitPython advisories and unpin python-semantic-release
+  ([#9](https://github.com/Djelibeybi/hermes-agent-api-client/pull/9),
+  [`76574a3`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/76574a306bdb21e5e9488a509d650b8aaa7b61e5))
+
+- **deps**: Upgrade GitPython to 3.2.1 to clear security advisories
+  ([#9](https://github.com/Djelibeybi/hermes-agent-api-client/pull/9),
+  [`76574a3`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/76574a306bdb21e5e9488a509d650b8aaa7b61e5))
+
+### Chores
+
+- Switch GSD config to Claude runtime and ignore .claude/
+  ([`968143f`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/968143f39ac747914c377675228ba16e0691ced3))
+
+- **deps**: Unpin python-semantic-release and upgrade to 10.7.0
+  ([#9](https://github.com/Djelibeybi/hermes-agent-api-client/pull/9),
+  [`76574a3`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/76574a306bdb21e5e9488a509d650b8aaa7b61e5))
+
+
 ## v0.3.1 (2026-07-17)
 
 ### Bug Fixes
