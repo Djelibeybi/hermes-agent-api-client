@@ -41,13 +41,20 @@ _SDIST_STREAM_LIMIT = 11_000_000
 
 
 @pytest.fixture(scope="module")
-def built_distributions() -> tuple[Path, Path]:
+def built_distributions(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[Path, Path]:
     """Build and return the sole wheel and source distribution."""
     project_root = Path(__file__).parents[1]
-    subprocess.run(["uv", "build"], cwd=project_root, check=True)  # noqa: S607
+    out_dir = tmp_path_factory.mktemp("dist")
+    subprocess.run(  # noqa: S603
+        ["uv", "build", "--out-dir", str(out_dir)],  # noqa: S607
+        cwd=project_root,
+        check=True,
+    )
 
-    wheels = list((project_root / "dist").glob("*.whl"))
-    sdists = list((project_root / "dist").glob("*.tar.gz"))
+    wheels = list(out_dir.glob("*.whl"))
+    sdists = list(out_dir.glob("*.tar.gz"))
     assert len(wheels) == 1
     assert len(sdists) == 1
     return (wheels[0], sdists[0])
