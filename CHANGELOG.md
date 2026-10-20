@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.3.3 (2026-10-20)
+
+### Bug Fixes
+
+- **deps**: Upgrade urllib3 to 2.8.0 to clear security advisories
+  ([#10](https://github.com/Djelibeybi/hermes-agent-api-client/pull/10),
+  [`386f56d`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/386f56da17fe5b8336fd8b042468e393f5b7f79d))
+
+### Testing
+
+- Build package fixtures into an isolated directory
+  ([#10](https://github.com/Djelibeybi/hermes-agent-api-client/pull/10),
+  [`386f56d`](https://github.com/Djelibeybi/hermes-agent-api-client/commit/386f56da17fe5b8336fd8b042468e393f5b7f79d))
+
+
 ## v0.3.2 (2026-10-20)
 
 ### Bug Fixes
