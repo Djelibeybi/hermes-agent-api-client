@@ -50,10 +50,10 @@ Python consumers can use a typed, bounded, secret-safe asynchronous client for t
 - ✓ Typed distribution and locked verification gates — v0.1.0
 - ✓ Correlated, bounded tool-progress events — validated in Phase 2: Conversation Event Contract
 - ✓ Safe terminal partial-state and failure metadata — validated in Phase 2: Conversation Event Contract
+- ✓ Independently optional, strictly validated session ID and session key headers with no caller or client state mutation, no session-value leakage on any exit path, and no change to injected-client ownership. Shipped in PR #7 (v0.3.1) and validated with characterisation and mutation evidence in Phase 3: Session Header Safety. Pre-iteration frame retention is a documented boundary (D-02, `q2-document-boundary`).
 
 ### Active
 
-- [ ] Consumers can send independently optional, strictly validated session ID and session key headers without mutating caller or client state.
 - [ ] Existing authentication, retryability, protocol ordering, resource ownership, typing, coverage, and distribution guarantees remain green.
 
 ### Out of Scope
@@ -80,4 +80,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-17 after completing Phase 2: Conversation Event Contract*
+*Last updated: 2026-10-20 after completing Phase 3: Session Header Safety*

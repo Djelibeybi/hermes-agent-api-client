@@ -17,7 +17,7 @@ policy remain owned by `hermes-conversation`.
 ## Phases
 
 - [x] **Phase 2: Conversation Event Contract** — Expose bounded correlated tool progress and strict safe terminal metadata without raw upstream data. (completed 2026-07-17)
-- [ ] **Phase 3: Session Header Safety** — Transport independently optional opaque session values with exact validation, secrecy, isolation, and response ownership.
+- [x] **Phase 3: Session Header Safety** — Transport independently optional opaque session values with exact validation, secrecy, isolation, and response ownership. (completed 2026-10-20)
 - [ ] **Phase 4: Contract and Distribution Verification** — Prove the complete v0.3.0 contract from source and built artifacts against current compatible dependencies.
 
 ## Phase Details
@@ -72,7 +72,24 @@ Plans:
   4. Session canaries are absent from public failures, text representations, traceback chains, and retained generator locals after rejection, completion, early close, or cancellation.
   5. Closing or cancelling a stream closes its response but never an injected caller-owned HTTP client, and `asyncio.CancelledError` propagates after cleanup.
 
-**Plans:** TBD
+**Plans:** 4/4 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] 03-01-PLAN.md — Tracer: prove that early close and mid-iteration cancellation close only the response and keep the injected client reusable (HTTP-02, D-08 cancellation row).
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 03-02-PLAN.md — Prove exact-header-only mapping, no arbitrary-header API, the CR/TAB/bytes/path-shape rejection matrix and positive session bounds (SESS-01 to SESS-03, D-08 rejection row).
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 03-03-PLAN.md — Prove completion, early close and every post-dispatch failure carry no session values (SESS-05).
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 03-04-PLAN.md — Settle the two D-02 evidence questions with the user, run the D-11 mutation check, and write the D-10/D-11 evidence record (`03-TRACEABILITY.md`).
 
 ### Phase 4: Contract and Distribution Verification
 
@@ -96,5 +113,5 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 1. Typed Hermes API Client | v0.1.0 | 1/1 | Complete | 2026-07-15 |
 | 2. Conversation Event Contract | v0.3.0 | 6/6 | Complete    | 2026-07-17 |
-| 3. Session Header Safety | v0.3.0 | 0/TBD | Not started | - |
+| 3. Session Header Safety | v0.3.0 | 4/4 | Complete    | 2026-10-20 |
 | 4. Contract and Distribution Verification | v0.3.0 | 0/TBD | Not started | - |
