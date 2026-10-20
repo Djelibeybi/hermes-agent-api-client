@@ -94,6 +94,5 @@ desktop.ini
 .token
 
 # AI tooling
-.claude/settings.local.json
-.claude/worktrees/
+.claude/
 .serena/
